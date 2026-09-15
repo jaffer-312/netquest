@@ -22,6 +22,12 @@ type Question = {
   category: string;
   difficulty: string;
   marks: number;
+  answer: string;
+  option_a: string;
+  option_b: string;
+  option_c: string;
+  option_d: string;
+  explanation: string;
 };
 
 export default function StudentTestPage() {

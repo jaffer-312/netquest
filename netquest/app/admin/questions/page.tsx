@@ -77,7 +77,7 @@ export default function QuestionBankPage() {
 
     if (error) {
       console.error("SUPABASE Error:",JSON.stringify(error,null,2)) 
-      alert(JSON.stringigy(error,null,2));
+      alert(JSON.stringify(error,null,2));
       return;     
     }
 

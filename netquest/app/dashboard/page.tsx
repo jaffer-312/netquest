@@ -19,6 +19,7 @@ export default function DashboardPage() {
   const supabase = createClient();
 
   const [tests, setTests] = useState<Test[]>([]);
+  const [allTests, setAllTests] = useState<Test[]>([]);
   const [loading, setLoading] = useState(true);
   const [studentName, setStudentName] = useState("");
   const [studentId, setStudentId] = useState("");
@@ -165,6 +166,20 @@ async function loadTests() {
     }
 
     setTests(data || []);
+
+    // Keep all challenge titles available for performance/history,
+    // including challenges that may no longer be active.
+    const { data: allTestData, error: allTestError } = await supabase
+      .from("tests")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (allTestError) {
+      console.error("DASHBOARD ALL TESTS LOAD ERROR:", allTestError);
+    } else {
+      setAllTests(allTestData || []);
+    }
+
     setLoading(false);
   }
 
@@ -336,6 +351,95 @@ async function loadTests() {
 </section>
        
 
+        {/* MY PROFILE */}
+        <section className="mt-12">
+          <div className="mb-5">
+            <p className="text-xs font-bold uppercase tracking-[0.25em] text-cyan-400">
+              Student Profile
+            </p>
+            <h2 className="mt-2 text-3xl font-black">
+              👤 My NetQuest Profile
+            </h2>
+            <p className="mt-2 text-slate-500">
+              Your Student ID and overall challenge performance.
+            </p>
+          </div>
+
+          <div className="grid gap-5 lg:grid-cols-[1.15fr_1fr]">
+            <div className="rounded-3xl border border-cyan-400/20 bg-gradient-to-br from-cyan-400/[0.10] to-white/[0.03] p-7">
+              <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">
+                    Student
+                  </p>
+                  <h3 className="mt-2 text-3xl font-black">
+                    {studentName || "NetQuest Student"}
+                  </h3>
+                  <p className="mt-2 font-bold text-cyan-400">
+                    {studentId || "Student ID pending"}
+                  </p>
+                </div>
+                <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-cyan-400/10 text-4xl">
+                  🎓
+                </div>
+              </div>
+
+              <div className="mt-7 grid grid-cols-2 gap-3">
+                <MiniStat label="Attempts" value={results.length.toString()} />
+                <MiniStat
+                  label="Challenges"
+                  value={new Set(results.map((r) => r.test_id)).size.toString()}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <ProfileMetric
+                icon="🏆"
+                label="Best %"
+                value={
+                  results.length > 0
+                    ? `${Math.max(...results.map((r) => Number(r.percentage) || 0))}%`
+                    : "--"
+                }
+              />
+              <ProfileMetric
+                icon="📈"
+                label="Average %"
+                value={
+                  results.length > 0
+                    ? `${Math.round(
+                        results.reduce(
+                          (sum, r) => sum + (Number(r.percentage) || 0),
+                          0
+                        ) / results.length
+                      )}%`
+                    : "--"
+                }
+              />
+              <ProfileMetric
+                icon="🎯"
+                label="Correct"
+                value={
+                  results.length > 0
+                    ? results
+                        .reduce(
+                          (sum, r) => sum + (Number(r.correct_answers) || 0),
+                          0
+                        )
+                        .toString()
+                    : "0"
+                }
+              />
+              <ProfileMetric
+                icon="🥇"
+                label="Rank"
+                value={leaderboardRank}
+              />
+            </div>
+          </div>
+        </section>
+
         {/* ACTIVE CHALLENGES */}
         <section>
           <div className="mb-5 flex items-end justify-between">
@@ -495,6 +599,101 @@ async function loadTests() {
           )}
         </section>
 
+        {/* RECENT ATTEMPTS */}
+        <section className="mt-12">
+          <div className="mb-5">
+            <p className="text-xs font-bold uppercase tracking-[0.25em] text-cyan-400">
+              Activity
+            </p>
+            <h2 className="mt-2 text-3xl font-black">
+              🕘 Recent Attempts
+            </h2>
+            <p className="mt-2 text-slate-500">
+              Your latest challenge submissions.
+            </p>
+          </div>
+
+          {results.length === 0 ? (
+            <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-8 text-center">
+              <div className="text-4xl">📭</div>
+              <p className="mt-3 text-slate-400">
+                No attempts yet. Start a challenge to build your history.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-3xl border border-white/10 bg-white/[0.03]">
+              <div className="hidden grid-cols-[1.6fr_0.8fr_0.8fr_0.8fr_1.2fr] gap-4 border-b border-white/10 px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500 md:grid">
+                <span>Challenge</span>
+                <span>Score</span>
+                <span>Percentage</span>
+                <span>Result</span>
+                <span>Date</span>
+              </div>
+
+              <div className="divide-y divide-white/10">
+                {results.slice(0, 8).map((result) => {
+                  const test = allTests.find((item) => item.id === result.test_id);
+                  const percentage = Number(result.percentage) || 0;
+
+                  return (
+                    <div
+                      key={result.id}
+                      className="grid gap-3 px-6 py-5 transition hover:bg-white/[0.03] md:grid-cols-[1.6fr_0.8fr_0.8fr_0.8fr_1.2fr] md:items-center md:gap-4"
+                    >
+                      <div>
+                        <p className="font-black">
+                          {test?.title || `Challenge #${result.test_id}`}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-600">
+                          Attempt #{result.id}
+                        </p>
+                      </div>
+
+                      <div className="text-sm font-bold">
+                        {result.score}/{result.total_marks}
+                      </div>
+
+                      <div className="font-black text-cyan-400">
+                        {percentage}%
+                      </div>
+
+                      <div>
+                        <span
+                          className={`rounded-full px-3 py-1 text-xs font-bold ${
+                            percentage >= 80
+                              ? "bg-green-400/10 text-green-400"
+                              : percentage >= 50
+                                ? "bg-yellow-400/10 text-yellow-400"
+                                : "bg-red-400/10 text-red-400"
+                          }`}
+                        >
+                          {percentage >= 80
+                            ? "Excellent"
+                            : percentage >= 50
+                              ? "Keep Going"
+                              : "Practice More"}
+                        </span>
+                      </div>
+
+                      <div className="text-sm text-slate-500">
+                        {result.created_at
+                          ? new Date(result.created_at).toLocaleString("en-IN", {
+                              day: "2-digit",
+                              month: "short",
+                              year: "numeric",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })
+                          : "--"}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </section>
+
         {/* QUICK ACCESS */}
         <section className="mt-12 grid gap-5 md:grid-cols-2">
 
@@ -618,6 +817,28 @@ function DashboardStat({
       </div>
 
       <p className="mt-4 text-sm font-bold text-slate-500">
+        {label}
+      </p>
+    </div>
+  );
+}
+
+function ProfileMetric({
+  icon,
+  label,
+  value,
+}: {
+  icon: string;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-5 transition hover:-translate-y-1 hover:border-cyan-400/20">
+      <div className="flex items-center justify-between">
+        <span className="text-2xl">{icon}</span>
+        <span className="text-2xl font-black text-cyan-400">{value}</span>
+      </div>
+      <p className="mt-4 text-xs font-bold uppercase tracking-wider text-slate-500">
         {label}
       </p>
     </div>

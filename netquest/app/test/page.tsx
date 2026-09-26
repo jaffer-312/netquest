@@ -1,7 +1,8 @@
 "use client";
 
 import { createClient } from "../../utils/supabase/client";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 type Test = {
   id: number;
@@ -30,8 +31,10 @@ type Question = {
   explanation: string;
 };
 
-export default function StudentTestPage() {
+function StudentTestPageContent() {
   const supabase = createClient();
+  const searchParams = useSearchParams();
+  const testId = searchParams.get("testId");
 
   const [tests, setTests] = useState<Test[]>([]);
   const [selectedTest, setSelectedTest] = useState<Test | null>(null);
@@ -53,12 +56,105 @@ const [correctAnswers, setCorrectAnswers] = useState(0);
 const [wrongAnswers, setWrongAnswers] = useState(0);
 const [showAnalysis, setShowAnalysis] = useState(false);
 const [studentName, setStudentName] = useState("");
+const [studentId, setStudentId] = useState("");
 const [showNameInput, setShowNameInput] = useState(false);
   useEffect(() => {
     loadTests();
   }, []);
 
-  async function loadTests() {
+  useEffect(() => {
+  if (!testId || tests.length === 0) return;
+
+  const requestedTest = tests.find(
+    (test) => test.id === Number(testId)
+  );
+
+  if (requestedTest) {
+    setSelectedTest(requestedTest);
+    setShowNameInput(true);
+  }
+}, [testId, tests]);
+
+  async function getOrCreateStudent(name: string) {
+  const cleanName = name.trim();
+
+  if (!cleanName) {
+    return null;
+  }
+
+  // Check whether this browser already has a NetQuest Student ID
+  const savedStudentId = localStorage.getItem("netquest_student_id");
+
+  if (savedStudentId) {
+    const { data, error } = await supabase
+      .from("students")
+      .select("student_id, student_name")
+      .eq("student_id", savedStudentId)
+      .maybeSingle();
+
+    if (!error && data) {
+      setStudentId(data.student_id);
+      setStudentName(data.student_name);
+      return data.student_id;
+    }
+  }
+
+  // Check existing student by exact name
+  const { data: existingStudent, error: existingError } = await supabase
+    .from("students")
+    .select("student_id, student_name")
+    .eq("student_name", cleanName)
+    .maybeSingle();
+
+  if (existingError) {
+    console.error(
+      "STUDENT LOOKUP ERROR:",
+      JSON.stringify(existingError, null, 2)
+    );
+    return null;
+  }
+
+  if (existingStudent) {
+    localStorage.setItem(
+      "netquest_student_id",
+      existingStudent.student_id
+    );
+
+    setStudentId(existingStudent.student_id);
+    setStudentName(existingStudent.student_name);
+
+    return existingStudent.student_id;
+  }
+
+  // Create new student
+  const { data: newStudent, error: createError } = await supabase
+    .from("students")
+    .insert({
+      student_name: cleanName,
+    })
+    .select("student_id, student_name")
+    .single();
+
+  if (createError) {
+    console.error(
+      "STUDENT CREATE ERROR:",
+      JSON.stringify(createError, null, 2)
+    );
+    return null;
+  }
+
+  localStorage.setItem(
+    "netquest_student_id",
+    newStudent.student_id
+  );
+
+  setStudentId(newStudent.student_id);
+  setStudentName(newStudent.student_name);
+
+  return newStudent.student_id;
+}
+
+async function loadTests() {
     setLoading(true);
 
     const { data, error } = await supabase
@@ -204,6 +300,7 @@ async function submitTest() {
     .from("results")
     .insert({
       test_id: selectedTest?.id,
+      student_id: studentId,
       student_name: studentName.trim(),
       score: score,
       total_marks: totalMarks,
@@ -376,7 +473,9 @@ if (testCompleted && selectedTest) {
 )}
 
           <button
-            onClick={() => window.location.reload()}
+            onClick={() => {
+              window.location.href = "/test";
+              }}
             className="mt-8 rounded-xl bg-cyan-400 px-8 py-4 font-black text-slate-950"
           >
             BACK TO TESTS
@@ -745,15 +844,24 @@ if (testCompleted && selectedTest) {
           />
 
           <button
-            onClick={() => {
-              if (!studentName.trim()) {
-                alert("Please enter your name.");
-                return;
-              }
+           onClick={async () => {
+  if (!studentName.trim()) {
+    alert("Please enter your name.");
+    return;
+  }
 
-              setShowNameInput(false);
-              startTest(selectedTest);
-            }}
+  const id = await getOrCreateStudent(studentName);
+
+  if (!id) {
+    alert("Unable to create/find your Student ID.");
+    return;
+  }
+
+  localStorage.setItem("netquest_student_name", studentName.trim());
+
+  setShowNameInput(false);
+  startTest(selectedTest);
+}}
             className="mt-5 w-full rounded-xl bg-cyan-400 py-4 font-black text-slate-950"
           >
             START TEST 🚀
@@ -857,6 +965,24 @@ if (testCompleted && selectedTest) {
 
       </div>
     </main>
+  );
+}
+
+
+export default function StudentTestPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-screen items-center justify-center bg-[#050816] text-white">
+          <div className="text-center">
+            <div className="text-4xl">⚡</div>
+            <p className="mt-3 text-slate-400">Loading...</p>
+          </div>
+        </main>
+      }
+    >
+      <StudentTestPageContent />
+    </Suspense>
   );
 }
 

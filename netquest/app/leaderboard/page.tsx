@@ -7,6 +7,7 @@ const supabase = createClient();
 
 type Result = {
   id: number;
+  student_id: string | null;
   student_name: string;
   test_id: number;
   score: number;

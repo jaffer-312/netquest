@@ -695,7 +695,7 @@ async function loadTests() {
         </section>
 
         {/* QUICK ACCESS */}
-        <section className="mt-12 grid gap-5 md:grid-cols-2">
+        <section className="mt-12 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
 
           <a
             href="/leaderboard"
@@ -713,6 +713,25 @@ async function loadTests() {
 
             <div className="mt-5 font-bold text-cyan-400 transition group-hover:translate-x-1">
               VIEW LEADERBOARD →
+            </div>
+          </a>
+
+          <a
+            href="/history"
+            className="group rounded-3xl border border-white/10 bg-white/[0.03] p-7 transition hover:-translate-y-1 hover:border-cyan-400/30"
+          >
+            <div className="text-4xl">📜</div>
+
+            <h3 className="mt-4 text-2xl font-black">
+              Attempt History
+            </h3>
+
+            <p className="mt-2 text-slate-500">
+              Review all your previous challenge attempts and performance.
+            </p>
+
+            <div className="mt-5 font-bold text-cyan-400 transition group-hover:translate-x-1">
+              VIEW HISTORY →
             </div>
           </a>
 

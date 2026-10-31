@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "../../utils/supabase/client";
+import Link from "next/link";
 
 const supabase = createClient();
 
@@ -111,6 +112,25 @@ export default function LeaderboardPage() {
           <p className="mt-2 text-slate-400">
             Top performers across NetQuest tests.
           </p>
+          <br></br>
+
+          <div>
+
+          <nav className="mb-6 flex flex-wrap gap-3">
+  <Link
+    href="/"
+    className="rounded-xl border border-white/10 px-4 py-2 font-semibold text-slate-300 hover:border-cyan-400 hover:text-cyan-300"
+  >
+    ← Home
+  </Link>
+
+  <Link
+    href="/dashboard"
+    className="rounded-xl bg-cyan-400 px-4 py-2 font-bold text-slate-950 hover:bg-cyan-300"
+  >
+    🎮 Student Dashboard
+  </Link>
+</nav> </div>
 
           {tests.length > 0 && (
             <div className="mt-6 max-w-md">

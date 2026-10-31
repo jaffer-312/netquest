@@ -1,1034 +1,631 @@
+
 "use client";
 
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { createClient } from "../../utils/supabase/client";
-import { Suspense, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
 
 type Test = {
   id: number;
   title: string;
-  description: string;
-  category: string;
-  difficulty: string;
+  description: string | null;
+  category: string | null;
+  difficulty: string | null;
   duration_minutes: number;
   question_count: number;
   total_marks: number;
-  randomize: boolean;
   is_enabled: boolean;
 };
 
 type Question = {
   id: number;
   question: string;
-  category: string;
-  difficulty: string;
+  category: string | null;
+  difficulty: string | null;
   marks: number;
-  answer: string;
   option_a: string;
   option_b: string;
   option_c: string;
   option_d: string;
-  explanation: string;
 };
 
-function StudentTestPageContent() {
-  const supabase = createClient();
-  const searchParams = useSearchParams();
-  const testId = searchParams.get("testId");
-
-  const [tests, setTests] = useState<Test[]>([]);
-  const [selectedTest, setSelectedTest] = useState<Test | null>(null);
-
-  const [questions, setQuestions] = useState<Question[]>([]);
-  const [currentQuestion, setCurrentQuestion] = useState(0);
-
-  const [answers, setAnswers] = useState<Record<number, string>>({});
-  
-  const [loading, setLoading] = useState(true);
-  const [testStarted, setTestStarted] = useState(false);
-  const [timeLeft, setTimeLeft] = useState(0);
-  
-const [testCompleted, setTestCompleted] = useState(false);
-const [finalScore, setFinalScore] = useState(0);
-const [finalTotalMarks, setFinalTotalMarks] = useState(0);
-const [finalPercentage, setFinalPercentage] = useState(0);
-const [correctAnswers, setCorrectAnswers] = useState(0);
-const [wrongAnswers, setWrongAnswers] = useState(0);
-const [showAnalysis, setShowAnalysis] = useState(false);
-const [studentName, setStudentName] = useState("");
-const [studentId, setStudentId] = useState("");
-const [showNameInput, setShowNameInput] = useState(false);
-  useEffect(() => {
-    loadTests();
-  }, []);
-
-  useEffect(() => {
-  if (!testId || tests.length === 0) return;
-
-  const requestedTest = tests.find(
-    (test) => test.id === Number(testId)
-  );
-
-  if (requestedTest) {
-    setSelectedTest(requestedTest);
-    setShowNameInput(true);
-  }
-}, [testId, tests]);
-
-  async function getOrCreateStudent(name: string) {
-  const cleanName = name.trim();
-
-  if (!cleanName) {
-    return null;
-  }
-
-  // Check whether this browser already has a NetQuest Student ID
-  const savedStudentId = localStorage.getItem("netquest_student_id");
-
-  if (savedStudentId) {
-    const { data, error } = await supabase
-      .from("students")
-      .select("student_id, student_name")
-      .eq("student_id", savedStudentId)
-      .maybeSingle();
-
-    if (!error && data) {
-      setStudentId(data.student_id);
-      setStudentName(data.student_name);
-      return data.student_id;
-    }
-  }
-
-  // Check existing student by exact name
-  const { data: existingStudent, error: existingError } = await supabase
-    .from("students")
-    .select("student_id, student_name")
-    .eq("student_name", cleanName)
-    .maybeSingle();
-
-  if (existingError) {
-    console.error(
-      "STUDENT LOOKUP ERROR:",
-      JSON.stringify(existingError, null, 2)
-    );
-    return null;
-  }
-
-  if (existingStudent) {
-    localStorage.setItem(
-      "netquest_student_id",
-      existingStudent.student_id
-    );
-
-    setStudentId(existingStudent.student_id);
-    setStudentName(existingStudent.student_name);
-
-    return existingStudent.student_id;
-  }
-
-  // Create new student
-  const { data: newStudent, error: createError } = await supabase
-    .from("students")
-    .insert({
-      student_name: cleanName,
-    })
-    .select("student_id, student_name")
-    .single();
-
-  if (createError) {
-    console.error(
-      "STUDENT CREATE ERROR:",
-      JSON.stringify(createError, null, 2)
-    );
-    return null;
-  }
-
-  localStorage.setItem(
-    "netquest_student_id",
-    newStudent.student_id
-  );
-
-  setStudentId(newStudent.student_id);
-  setStudentName(newStudent.student_name);
-
-  return newStudent.student_id;
-}
-
-async function loadTests() {
-    setLoading(true);
-
-    const { data, error } = await supabase
-      .from("tests")
-      .select("*")
-      .eq("is_enabled", true)
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      console.error(
-        "SUPABASE TEST LOAD ERROR:",
-        JSON.stringify(error, null, 2)
-      );
-      setLoading(false);
-      return;
-    }
-
-    setTests(data || []);
-    setLoading(false);
-  }
-
-  async function startTest(test: Test) {
-    setSelectedTest(test);
-    setLoading(true);
-
-    const { data, error } = await supabase
-        .from("test_questions")
-        .select(`
-    question_order,
-    questions (
-      id,
-      question,
-      category,
-      difficulty,
-      marks,
-      option_a,
-      option_b,
-      option_c,
-      option_d,
-      answer,
-      explanation
-    )
-  
-      `)
-      .eq("test_id", test.id)
-      .order("question_order", { ascending: true });
-
-    if (error) {
-      console.error(
-        "SUPABASE QUESTION LOAD ERROR:",
-        JSON.stringify(error, null, 2)
-      );
-
-      alert(`Unable to load questions: ${error.message}`);
-      setLoading(false);
-      return;
-    }
-
-    const loadedQuestions = (data || [])
-      .map((item: any) => item.questions)
-      .filter(Boolean);
-
-    setQuestions(loadedQuestions);
-    setCurrentQuestion(0);
-    setAnswers({});
-    setTimeLeft(test.duration_minutes * 60);
-    setTestStarted(true);
-    setLoading(false);
-  }
-
-  function selectAnswer(answer: string) {
-    const question = questions[currentQuestion];
-
-    if (!question) return;
-
-    setAnswers((prev) => ({
-      ...prev,
-      [question.id]: answer,
-    }));
-  }
-
-  function nextQuestion() {
-    if (currentQuestion < questions.length - 1) {
-      setCurrentQuestion((prev) => prev + 1);
-    }
-  }
-
-  function previousQuestion() {
-    if (currentQuestion > 0) {
-      setCurrentQuestion((prev) => prev - 1);
-    }
-  }
-useEffect(() => {
-  if (!testStarted || testCompleted || timeLeft <= 0) {
-    return;
-  }
-
-  const timer = setInterval(() => {
-    setTimeLeft((prev) => prev - 1);
-  }, 1000);
-
-  return () => clearInterval(timer);
-}, [testStarted, testCompleted, timeLeft]);
-
-useEffect(() => {
-  if (testStarted && !testCompleted && timeLeft === 0) {
-    submitTest();
-  }
-}, [timeLeft, testStarted, testCompleted]);
-function formatTime(seconds: number) {
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-
-  return `${minutes.toString().padStart(2, "0")}:${remainingSeconds
-    .toString()
-    .padStart(2, "0")}`;
-}
-
-async function submitTest() {
-  let score = 0;
-  let totalMarks = 0;
-  let correct = 0;
-
-  questions.forEach((question) => {
-    totalMarks += question.marks || 0;
-
-    if (answers[question.id] === question.answer) {
-      score += question.marks || 0;
-      correct++;
-    }
-  });
-
-  const answered = Object.keys(answers).length;
-  const wrong = answered - correct;
-
-  const percentage =
-    totalMarks > 0
-      ? Math.round((score / totalMarks) * 100)
-      : 0;
-
-  // Save result to Supabase
-  const { error } = await supabase
-    .from("results")
-    .insert({
-      test_id: selectedTest?.id,
-      student_id: studentId,
-      student_name: studentName.trim(),
-      score: score,
-      total_marks: totalMarks,
-      percentage: percentage,
-      correct_answers: correct,
-      wrong_answers: wrong,
-      answered_questions: answered,
-    });
-
-  if (error) {
-    console.error(
-      "SUPABASE RESULT SAVE ERROR:",
-      JSON.stringify(error, null, 2)
-    );
-
-    alert(`Result save failed: ${error.message}`);
-    return;
-  }
-
-  setFinalScore(score);
-  setFinalTotalMarks(totalMarks);
-  setFinalPercentage(percentage);
-  setCorrectAnswers(correct);
-  setWrongAnswers(wrong);
-  setTestCompleted(true);
-}
-if (testCompleted && selectedTest) {
-  return (
-    <main className="min-h-screen bg-[#050816] px-5 py-10 text-white">
-      <div className="mx-auto max-w-3xl">
-
-        <div className="text-center">
-
-          <div className="text-6xl">
-            {finalPercentage >= 80 ? "🏆" : "🎯"}
-          </div>
-
-          <p className="mt-5 text-xs font-bold uppercase tracking-[0.3em] text-cyan-400">
-            Test Completed
-          </p>
-
-          <h1 className="mt-3 text-4xl font-black">
-            {selectedTest.title}
-          </h1>
-
-          <div className="mt-10 rounded-3xl border border-cyan-400/20 bg-white/[0.03] p-10">
-
-            <p className="text-sm text-slate-500">
-              YOUR SCORE
-            </p>
-
-            <div className="mt-3 text-7xl font-black text-cyan-400">
-              {finalPercentage}%
-            </div>
-
-            <p className="mt-3 text-xl font-bold">
-              {finalScore} / {finalTotalMarks}
-            </p>
-
-            <p className="mt-4 text-slate-400">
-              {finalPercentage >= 80
-                ? "Excellent performance! 🔥"
-                : finalPercentage >= 50
-                ? "Good effort! Keep improving. 💪"
-                : "Keep practicing. You can do better! 🚀"}
-            </p>
-
-          </div>
-
-          <div className="mt-6 grid grid-cols-3 gap-4">
-
-            <ResultCard
-              label="Answered"
-              value={Object.keys(answers).length.toString()}
-            />
-
-            <ResultCard
-              label="Correct"
-              value={correctAnswers.toString()}
-            />
-
-            <ResultCard
-              label="Wrong"
-              value={wrongAnswers.toString()}
-            />
-
-          </div>
-          <button
-  onClick={() => setShowAnalysis(true)}
-  className="mt-8 w-full rounded-xl border border-cyan-400/30 px-8 py-4 font-black text-cyan-400 hover:bg-cyan-400/10"
->
-  VIEW ANALYSIS 📊
-</button>
-{showAnalysis && (
-  <div className="mt-8 text-left">
-    <h2 className="mb-5 text-2xl font-black">
-      📊 Question-wise Analysis
-    </h2>
-
-    <div className="space-y-4">
-      {questions.map((question, index) => {
-        const selectedAnswer = answers[question.id];
-
-        const isCorrect =
-          selectedAnswer === question.answer;
-
-        const options = {
-          A: question.option_a,
-          B: question.option_b,
-          C: question.option_c,
-          D: question.option_d,
-        };
-
-        return (
-          <div
-            key={question.id}
-            className="rounded-2xl border border-white/10 bg-white/[0.03] p-6"
-          >
-            <div className="flex items-start justify-between gap-4">
-              <h3 className="font-bold leading-7">
-                Q{index + 1}. {question.question}
-              </h3>
-
-              <span className="text-2xl">
-                {isCorrect ? "✅" : "❌"}
-              </span>
-            </div>
-
-            <p className="mt-4 text-sm">
-              <span className="text-slate-500">
-                Your answer:
-              </span>{" "}
-              {selectedAnswer
-                ? `${selectedAnswer}. ${
-                    options[
-                      selectedAnswer as keyof typeof options
-                    ]
-                  }`
-                : "Not answered"}
-            </p>
-
-            <p className="mt-2 text-sm">
-              <span className="text-slate-500">
-                Correct answer:
-              </span>{" "}
-              {question.answer}.{" "}
-              {
-                options[
-                  question.answer as keyof typeof options
-                ]
-              }
-            </p>
-
-            {question.explanation && (
-              <div className="mt-4 rounded-xl bg-black/20 p-4">
-                <p className="text-xs font-bold uppercase text-cyan-400">
-                  Explanation
-                </p>
-
-                <p className="mt-2 text-sm text-slate-400">
-                  {question.explanation}
-                </p>
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  </div>
-)}
-
-          <button
-            onClick={() => {
-              window.location.href = "/test";
-              }}
-            className="mt-8 rounded-xl bg-cyan-400 px-8 py-4 font-black text-slate-950"
-          >
-            BACK TO TESTS
-          </button>
-
-        </div>
-
-      </div>
-    </main>
-  );
-}
-
-  if (loading) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-[#050816] text-white">
-        <div className="text-center">
-          <div className="text-4xl">⚡</div>
-          <p className="mt-3 text-slate-400">
-            Loading...
-          </p>
-        </div>
-      </main>
-    );
-  }
-if (testCompleted && selectedTest) {
-  return (
-    <main className="min-h-screen bg-[#050816] px-5 py-10 text-white">
-      <div className="mx-auto max-w-3xl">
-
-        <div className="text-center">
-
-          <div className="text-6xl">
-            {finalPercentage >= 80 ? "🏆" : "🎯"}
-          </div>
-
-          <p className="mt-5 text-xs font-bold uppercase tracking-[0.3em] text-cyan-400">
-            Test Completed
-          </p>
-
-          <h1 className="mt-3 text-4xl font-black">
-            {selectedTest.title}
-          </h1>
-
-          <div className="mt-10 rounded-3xl border border-cyan-400/20 bg-white/[0.03] p-10">
-
-            <p className="text-sm text-slate-500">
-              YOUR SCORE
-            </p>
-
-            <div className="mt-3 text-7xl font-black text-cyan-400">
-              {finalPercentage}%
-            </div>
-
-            <p className="mt-3 text-xl font-bold">
-              {finalScore} / {finalTotalMarks}
-            </p>
-
-            <p className="mt-4 text-slate-400">
-              {finalPercentage >= 80
-                ? "Excellent performance! 🔥"
-                : finalPercentage >= 50
-                ? "Good effort! Keep improving. 💪"
-                : "Keep practicing. You can do better! 🚀"}
-            </p>
-
-          </div>
-
-          <div className="mt-6 grid grid-cols-3 gap-4">
-
-            <ResultCard
-              label="Answered"
-              value={Object.keys(answers).length.toString()}
-            />
-
-            <ResultCard
-              label="Correct"
-              value={correctAnswers.toString()}
-            />
-
-            <ResultCard
-              label="Wrong"
-              value={wrongAnswers.toString()}
-            />
-
-          </div>
-          {showAnalysis && (
-  <div className="mt-8 text-left">
-
-    <h2 className="mb-5 text-2xl font-black">
-      📊 Question-wise Analysis
-    </h2>
-
-    <div className="space-y-4">
-      {questions.map((question, index) => {
-        const selectedAnswer = answers[question.id];
-        const isCorrect =
-          selectedAnswer === question.answer;
-
-        const options = {
-          A: question.option_a,
-          B: question.option_b,
-          C: question.option_c,
-          D: question.option_d,
-        };
-
-        return (
-          <div
-            key={question.id}
-            className={`rounded-2xl border p-6 ${
-              isCorrect
-                ? "border-green-400/30 bg-green-400/5"
-                : "border-red-400/30 bg-red-400/5"
-            }`}
-          >
-
-            <div className="flex items-start justify-between gap-4">
-
-              <h3 className="font-bold leading-7">
-                Q{index + 1}. {question.question}
-              </h3>
-
-              <span className="text-2xl">
-                {isCorrect ? "✅" : "❌"}
-              </span>
-
-            </div>
-
-            <div className="mt-5 space-y-2 text-sm">
-
-              <p>
-                <span className="text-slate-500">
-                  Your answer:
-                </span>{" "}
-                <strong>
-                  {selectedAnswer
-                    ? `${selectedAnswer}. ${
-                        options[
-                          selectedAnswer as keyof typeof options
-                        ]
-                      }`
-                    : "Not answered"}
-                </strong>
-              </p>
-
-              <p>
-                <span className="text-slate-500">
-                  Correct answer:
-                </span>{" "}
-                <strong>
-                  {question.answer}.{" "}
-                  {
-                    options[
-                      question.answer as keyof typeof options
-                    ]
-                  }
-                </strong>
-              </p>
-
-            </div>
-
-            {question.explanation && (
-              <div className="mt-5 rounded-xl bg-black/20 p-4">
-                <p className="text-xs font-bold uppercase tracking-wider text-cyan-400">
-                  Explanation
-                </p>
-
-                <p className="mt-2 text-sm leading-6 text-slate-400">
-                  {question.explanation}
-                </p>
-              </div>
-            )}
-
-          </div>
-        );
-      })}
-    </div>
-
-  </div>
-)}
-
-          <button
-            onClick={() => window.location.reload()}
-            className="mt-8 rounded-xl bg-cyan-400 px-8 py-4 font-black text-slate-950"
-          >
-            BACK TO TESTS
-          </button>
-
-        </div>
-
-      </div>
-    </main>
-  );
-}
-  /* ---------- TEST SCREEN ---------- */
-
-  if (testStarted && selectedTest) {
-    const question = questions[currentQuestion];
-
-    if (!question) {
-      return (
-        <main className="flex min-h-screen items-center justify-center bg-[#050816] text-white">
-          No questions found for this test.
-        </main>
-      );
-    }
-
-    const selectedAnswer = answers[question.id];
-
-    return (
-      <main className="min-h-screen bg-[#050816] px-5 py-8 text-white">
-        <div className="mx-auto max-w-4xl">
-
-          {/* Header */}
-          <div className="mb-8 flex items-center justify-between gap-4">
-
-            <div>
-              <p className="text-xs font-bold uppercase tracking-[0.3em] text-cyan-400">
-                NetQuest
-              </p>
-
-              <h1 className="mt-2 text-2xl font-black">
-                {selectedTest.title}
-              </h1>
-            </div>
-
-            <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 px-5 py-3 text-center">
-              <p className="text-xs text-slate-500">
-                QUESTION
-              </p>
-
-              <p className="font-black text-cyan-400">
-                {currentQuestion + 1} / {questions.length}
-              </p>
-            </div>
-
-          </div>
-
-          {/* Progress */}
-          <div className="mb-8 h-2 overflow-hidden rounded-full bg-white/10">
-            <div
-              className="h-full bg-cyan-400 transition-all"
-              style={{
-                width: `${
-                  ((currentQuestion + 1) / questions.length) * 100
-                }%`,
-              }}
-            />
-          </div>
-
-          {/* Question Card */}
-          <section className="rounded-3xl border border-white/10 bg-white/[0.03] p-7">
-
-            <div className="flex flex-wrap gap-2">
-              <Badge text={question.category} />
-              <Badge text={question.difficulty} />
-              <Badge text={`${question.marks} mark`} />
-            </div>
-            <div className="mt-6 flex justify-end">
-  <div className="rounded-2xl border border-red-400/20 bg-red-400/10 px-5 py-3 text-center">
-    <p className="text-xs text-slate-500">
-      TIME LEFT
-    </p>
-
-    <p className="font-black text-red-400">
-      ⏱️ {formatTime(timeLeft)}
-    </p>
-  </div>
-</div>
-<div className="mt-7 text-sm font-bold text-gray-500">
-  Question {currentQuestion + 1} / {questions.length}
-</div>
-
-            <h2 className="mt-7 text-2xl font-black leading-relaxed">
-              {question.question}
-            </h2>
-
-            {/* Temporary options */}
-            <div className="mt-8 grid gap-4">
-  {[
-    { key: "A", text: question.option_a },
-    { key: "B", text: question.option_b },
-    { key: "C", text: question.option_c },
-    { key: "D", text: question.option_d },
-  ].map((option) => (
-    <button
-      key={option.key}
-      onClick={() => selectAnswer(option.key)}
-      className={`rounded-2xl border p-5 text-left transition ${
-        selectedAnswer === option.key
-          ? "border-cyan-400 bg-cyan-400/10"
-          : "border-white/10 bg-black/20 hover:border-cyan-400/30"
-      }`}
-    >
-      <span className="mr-4 inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 font-black">
-        {option.key}
-      </span>
-
-      {option.text}
-    </button>
-  ))}
-</div>     
-            
-
-          </section>
-
-          {/* Navigation */}
-          <div className="mt-6 flex items-center justify-between">
-
-            <button
-              onClick={previousQuestion}
-              disabled={currentQuestion === 0}
-              className="rounded-xl border border-white/10 px-6 py-3 font-bold disabled:opacity-30"
-            >
-              ← Previous
-            </button>
-
-            {currentQuestion === questions.length - 1 ? (
-              <button
-                onClick={submitTest}
-                className="rounded-xl bg-cyan-400 px-7 py-3 font-black text-slate-950"
-              >
-                SUBMIT TEST 🚀
-              </button>
-            ) : (
-              <button
-                onClick={nextQuestion}
-                className="rounded-xl bg-cyan-400 px-7 py-3 font-black text-slate-950"
-              >
-                NEXT →
-              </button>
-            )}
-
-          </div>
-
-        </div>
-      </main>
-    );
-  }
-
-  /* ---------- TEST LIST ---------- */
-  if (showNameInput && selectedTest) {
-  return (
-    <main className="min-h-screen bg-[#050816] px-5 py-10 text-white">
-      <div className="mx-auto flex min-h-[80vh] max-w-xl items-center justify-center">
-
-        <div className="w-full rounded-3xl border border-white/10 bg-white/[0.03] p-8">
-
-          <p className="text-xs font-bold uppercase tracking-[0.3em] text-cyan-400">
-            NetQuest
-          </p>
-
-          <h1 className="mt-3 text-3xl font-black">
-            Enter Your Name
-          </h1>
-
-          <p className="mt-2 text-slate-400">
-            Enter your name before starting the test.
-          </p>
-
-          <input
-            type="text"
-            value={studentName}
-            onChange={(e) => setStudentName(e.target.value)}
-            placeholder="Your name"
-            className="mt-7 w-full rounded-xl border border-white/10 bg-black/20 px-5 py-4 text-white outline-none placeholder:text-slate-600 focus:border-cyan-400"
-          />
-
-          <button
-           onClick={async () => {
-  if (!studentName.trim()) {
-    alert("Please enter your name.");
-    return;
-  }
-
-  const id = await getOrCreateStudent(studentName);
-
-  if (!id) {
-    alert("Unable to create/find your Student ID.");
-    return;
-  }
-
-  localStorage.setItem("netquest_student_name", studentName.trim());
-
-  setShowNameInput(false);
-  startTest(selectedTest);
-}}
-            className="mt-5 w-full rounded-xl bg-cyan-400 py-4 font-black text-slate-950"
-          >
-            START TEST 🚀
-          </button>
-
-        </div>
-      </div>
-    </main>
-  );
-}
-
-  return (
-    <main className="min-h-screen bg-[#050816] px-5 py-10 text-white">
-      <div className="mx-auto max-w-6xl">
-
-        <div className="mb-10">
-          <p className="text-xs font-bold uppercase tracking-[0.3em] text-cyan-400">
-            NetQuest
-          </p>
-
-          <h1 className="mt-2 text-4xl font-black">
-            Available Tests
-          </h1>
-
-          <p className="mt-2 text-slate-400">
-            Choose a test and challenge yourself.
-          </p>
-        </div>
-
-        {tests.length === 0 ? (
-          <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-12 text-center">
-            <div className="text-5xl">📭</div>
-
-            <h2 className="mt-4 text-xl font-black">
-              No active tests
-            </h2>
-
-            <p className="mt-2 text-slate-500">
-              There are no published tests available right now.
-            </p>
-          </div>
-        ) : (
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-
-            {tests.map((test) => (
-              <section
-                key={test.id}
-                className="rounded-3xl border border-white/10 bg-white/[0.03] p-6 transition hover:-translate-y-1 hover:border-cyan-400/30"
-              >
-
-                <div className="flex items-center justify-between">
-                  <Badge text={test.category} />
-
-                  <span className="text-xs text-slate-500">
-                    {test.difficulty}
-                  </span>
-                </div>
-
-                <h2 className="mt-5 text-2xl font-black">
-                  {test.title}
-                </h2>
-
-                <p className="mt-3 min-h-12 text-sm leading-6 text-slate-500">
-                  {test.description || "Test your knowledge with NetQuest."}
-                </p>
-
-                <div className="mt-6 grid grid-cols-3 gap-2">
-
-                  <Stat
-                    label="Questions"
-                    value={test.question_count.toString()}
-                  />
-
-                  <Stat
-                    label="Marks"
-                    value={test.total_marks.toString()}
-                  />
-
-                  <Stat
-                    label="Time"
-                    value={`${test.duration_minutes}m`}
-                  />
-
-                </div>
-
-                <button
-                  onClick={() => {
-                        setSelectedTest(test);
-                        setShowNameInput(true);
-                    }}
-                  className="mt-6 w-full rounded-xl bg-cyan-400 py-3 font-black text-slate-950 transition hover:scale-[1.02]"
-                >
-                  START TEST 🚀
-                </button>
-
-              </section>
-            ))}
-
-          </div>
-        )}
-
-      </div>
-    </main>
-  );
-}
-
-
-export default function StudentTestPage() {
+type SubmissionResult = {
+  resultId: number;
+  score: number;
+  totalMarks: number;
+  percentage: number;
+  correct: number;
+  wrong: number;
+  answered: number;
+  warning?: string;
+};
+
+export default function TestPage() {
   return (
     <Suspense
       fallback={
         <main className="flex min-h-screen items-center justify-center bg-[#050816] text-white">
-          <div className="text-center">
-            <div className="text-4xl">⚡</div>
-            <p className="mt-3 text-slate-400">Loading...</p>
-          </div>
+          Loading NetQuest...
         </main>
       }
     >
-      <StudentTestPageContent />
+      <TestPageContent />
     </Suspense>
   );
 }
 
-function Badge({ text }: { text: string }) {
+function TestPageContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const requestedTestId = searchParams.get("testId");
+
+  const submitLock = useRef(false);
+  const startedAtRef = useRef<number | null>(null);
+
+  const [tests, setTests] = useState<Test[]>([]);
+  const [selectedTest, setSelectedTest] = useState<Test | null>(null);
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [answers, setAnswers] = useState<Record<number, string>>({});
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [timeLeft, setTimeLeft] = useState(0);
+  const [started, setStarted] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<SubmissionResult | null>(null);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      const supabase = createClient();
+
+      setLoading(true);
+      setError("");
+
+      try {
+        const {
+          data: { user },
+          error: authError,
+        } = await supabase.auth.getUser();
+
+        if (authError || !user) {
+          router.replace("/student/login");
+          return;
+        }
+
+        const { data: profile, error: profileError } = await supabase
+          .from("students")
+          .select("student_id")
+          .eq("auth_user_id", user.id)
+          .maybeSingle();
+
+        if (profileError) throw profileError;
+
+        if (!profile) {
+          setError(
+            "Student profile not found. Please contact the administrator."
+          );
+          return;
+        }
+
+        const { data, error: testError } = await supabase
+          .from("tests")
+          .select(
+            "id, title, description, category, difficulty, duration_minutes, question_count, total_marks, is_enabled"
+          )
+          .eq("is_enabled", true)
+          .order("created_at", { ascending: false });
+
+        if (testError) throw testError;
+
+        if (!cancelled) {
+          setTests((data || []) as Test[]);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(
+            err instanceof Error ? err.message : "Unable to load tests."
+          );
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
+
+  const startTest = useCallback(async (test: Test) => {
+    const supabase = createClient();
+
+    setLoading(true);
+    setError("");
+    setNotice("");
+
+    try {
+      const { data, error: questionError } = await supabase
+        .from("test_questions")
+        .select(`
+          question_order,
+          questions (
+            id,
+            question,
+            category,
+            difficulty,
+            marks,
+            option_a,
+            option_b,
+            option_c,
+            option_d
+          )
+        `)
+        .eq("test_id", test.id)
+        .order("question_order", { ascending: true });
+
+      if (questionError) throw questionError;
+
+      const loaded = (data || [])
+        .map((row: any) => row.questions)
+        .filter(Boolean) as Question[];
+
+      if (loaded.length === 0) {
+        throw new Error("This test does not have any linked questions.");
+      }
+
+      setSelectedTest(test);
+      setQuestions(loaded);
+      setAnswers({});
+      setCurrentIndex(0);
+      setTimeLeft(Math.max(1, Number(test.duration_minutes) || 1) * 60);
+      setResult(null);
+
+      submitLock.current = false;
+      startedAtRef.current = Date.now();
+
+      setStarted(true);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Unable to load questions."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!requestedTestId || tests.length === 0 || selectedTest) return;
+
+    const test = tests.find(
+      (item) => item.id === Number(requestedTestId)
+    );
+
+    if (test) {
+      void startTest(test);
+    } else {
+      setError("This test is not available or has not been published.");
+    }
+  }, [requestedTestId, tests, selectedTest, startTest]);
+
+  const submitTest = useCallback(async () => {
+    if (!selectedTest || submitLock.current) return;
+
+    const durationSeconds =
+      startedAtRef.current === null
+        ? null
+        : Math.max(
+            0,
+            Math.floor((Date.now() - startedAtRef.current) / 1000)
+          );
+
+    submitLock.current = true;
+    setSubmitting(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/tests/submit", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          testId: selectedTest.id,
+          answers,
+          durationSeconds,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Test submission failed.");
+      }
+
+      if (data.warning) {
+        setNotice(data.warning);
+      }
+
+      router.push(`/results/${data.resultId}`);
+    } catch (err) {
+      submitLock.current = false;
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not submit your test. Please try again."
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }, [selectedTest, answers, router]);
+
+  useEffect(() => {
+    if (!started || submitting || result) return;
+
+    const timer = window.setInterval(() => {
+      setTimeLeft((previous) => Math.max(0, previous - 1));
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [started, submitting, result]);
+
+  useEffect(() => {
+    if (started && timeLeft === 0 && !submitting && !result) {
+      void submitTest();
+    }
+  }, [started, timeLeft, submitting, result, submitTest]);
+
+  function formatTime(seconds: number) {
+    const minutes = Math.floor(seconds / 60);
+    const remaining = seconds % 60;
+
+    return `${String(minutes).padStart(2, "0")}:${String(
+      remaining
+    ).padStart(2, "0")}`;
+  }
+
+  if (loading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[#050816] text-white">
+        <p className="text-slate-400">Loading test...</p>
+      </main>
+    );
+  }
+
+  const current = questions[currentIndex];
+
   return (
-    <span className="rounded-full bg-white/5 px-3 py-1 text-xs font-bold text-slate-400">
-      {text}
-    </span>
+    <main className="min-h-screen bg-[#050816] px-4 py-8 text-white sm:px-8">
+      <div className="mx-auto max-w-5xl">
+        <header className="mb-8 flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-5">
+          <Link href="/dashboard" className="font-black text-cyan-300">
+            ← NETQUEST
+          </Link>
+
+          <Link
+            href="/history"
+            className="text-sm text-slate-400 hover:text-white"
+          >
+            My History
+          </Link>
+        </header>
+
+        {error && (
+          <div
+            role="alert"
+            className="mb-6 rounded-xl border border-red-400/30 bg-red-950/30 p-4 text-red-200"
+          >
+            {error}
+
+            {!started && !result && (
+              <button
+                onClick={() => {
+                  setError("");
+                  router.refresh();
+                }}
+                className="ml-3 font-bold underline"
+              >
+                Refresh
+              </button>
+            )}
+          </div>
+        )}
+
+        {notice && (
+          <div
+            role="status"
+            className="mb-6 rounded-xl border border-yellow-400/30 bg-yellow-950/20 p-4 text-yellow-200"
+          >
+            {notice}
+          </div>
+        )}
+
+        {result && selectedTest ? (
+          <section className="rounded-3xl border border-cyan-400/20 bg-white/[0.03] p-6 text-center sm:p-10">
+            <div className="text-6xl">
+              {result.percentage >= 80 ? "🏆" : "🎯"}
+            </div>
+
+            <p className="mt-5 text-xs font-bold uppercase tracking-[0.3em] text-cyan-400">
+              Test Completed
+            </p>
+
+            <h1 className="mt-3 text-3xl font-black">
+              {selectedTest.title}
+            </h1>
+
+            <p className="mt-8 text-6xl font-black text-cyan-300">
+              {result.percentage}%
+            </p>
+
+            <p className="mt-2 text-xl font-bold">
+              {result.score} / {result.totalMarks} marks
+            </p>
+
+            <div className="mt-8 grid grid-cols-3 gap-3">
+              <Summary label="Answered" value={result.answered} />
+              <Summary label="Correct" value={result.correct} />
+              <Summary label="Wrong" value={result.wrong} />
+            </div>
+
+            <p className="mt-5 text-xs text-slate-500">
+              Result reference: {result.resultId}
+            </p>
+
+            <div className="mt-8 flex flex-wrap justify-center gap-3">
+              <Link
+                href="/history"
+                className="rounded-xl border border-white/10 px-5 py-3 font-bold hover:bg-white/5"
+              >
+                View History
+              </Link>
+
+              <Link
+                href="/dashboard"
+                className="rounded-xl bg-cyan-400 px-5 py-3 font-black text-slate-950 hover:bg-cyan-300"
+              >
+                Dashboard
+              </Link>
+            </div>
+          </section>
+        ) : !started ? (
+          <section>
+            <p className="text-xs font-bold uppercase tracking-[0.3em] text-cyan-400">
+              Student Assessment
+            </p>
+
+            <h1 className="mt-2 text-3xl font-black">
+              Available Tests
+            </h1>
+
+            <p className="mt-2 text-slate-400">
+              Select a published assessment to begin.
+            </p>
+
+            {tests.length === 0 ? (
+              <div className="mt-6 rounded-2xl border border-white/10 p-8 text-center text-slate-400">
+                No published tests are available.
+              </div>
+            ) : (
+              <div className="mt-6 grid gap-4 md:grid-cols-2">
+                {tests.map((test) => (
+                  <article
+                    key={test.id}
+                    className="rounded-2xl border border-white/10 bg-white/[0.03] p-6"
+                  >
+                    <p className="text-xs font-bold uppercase text-cyan-400">
+                      {test.category || "General"}
+                    </p>
+
+                    <h2 className="mt-3 text-xl font-black">
+                      {test.title}
+                    </h2>
+
+                    <p className="mt-2 text-sm text-slate-400">
+                      {test.description ||
+                        "Test your knowledge with NetQuest."}
+                    </p>
+
+                    <div className="mt-5 flex flex-wrap gap-4 text-sm text-slate-400">
+                      <span>{test.question_count} questions</span>
+                      <span>{test.total_marks} marks</span>
+                      <span>{test.duration_minutes} minutes</span>
+                    </div>
+
+                    <button
+                      onClick={() => void startTest(test)}
+                      className="mt-6 w-full rounded-xl bg-cyan-400 px-4 py-3 font-black text-slate-950 hover:bg-cyan-300"
+                    >
+                      Start Test →
+                    </button>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        ) : selectedTest && current ? (
+          <section>
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.25em] text-cyan-400">
+                  {selectedTest.category || "Assessment"}
+                </p>
+
+                <h1 className="mt-2 text-2xl font-black sm:text-3xl">
+                  {selectedTest.title}
+                </h1>
+
+                <p className="mt-2 text-sm text-slate-400">
+                  Question {currentIndex + 1} of {questions.length}
+                </p>
+              </div>
+
+              <div
+                className={`rounded-xl border px-5 py-3 text-xl font-black tabular-nums ${
+                  timeLeft <= 60
+                    ? "border-red-400/40 text-red-300"
+                    : "border-cyan-400/30 text-cyan-300"
+                }`}
+              >
+                ⏱ {formatTime(timeLeft)}
+              </div>
+            </div>
+
+            <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10">
+              <div
+                className="h-full bg-cyan-400 transition-all"
+                style={{
+                  width: `${
+                    ((currentIndex + 1) / questions.length) * 100
+                  }%`,
+                }}
+              />
+            </div>
+
+            <article className="mt-6 rounded-3xl border border-white/10 bg-white/[0.03] p-6 sm:p-8">
+              <div className="flex items-start justify-between gap-4">
+                <h2 className="text-lg font-bold leading-8 sm:text-xl">
+                  Q{currentIndex + 1}. {current.question}
+                </h2>
+
+                <span className="shrink-0 rounded-lg bg-cyan-400/10 px-3 py-2 text-sm font-bold text-cyan-300">
+                  {current.marks || 0} marks
+                </span>
+              </div>
+
+              <div className="mt-7 space-y-3">
+                {(
+                  [
+                    ["A", current.option_a],
+                    ["B", current.option_b],
+                    ["C", current.option_c],
+                    ["D", current.option_d],
+                  ] as [string, string][]
+                ).map(([letter, option]) => (
+                  <button
+                    key={letter}
+                    onClick={() =>
+                      setAnswers((previous) => ({
+                        ...previous,
+                        [current.id]: letter,
+                      }))
+                    }
+                    className={`flex w-full items-start gap-4 rounded-xl border p-4 text-left transition ${
+                      answers[current.id] === letter
+                        ? "border-cyan-400 bg-cyan-400/10"
+                        : "border-white/10 bg-black/20 hover:border-white/30"
+                    }`}
+                  >
+                    <span
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg font-black ${
+                        answers[current.id] === letter
+                          ? "bg-cyan-400 text-slate-950"
+                          : "bg-white/10"
+                      }`}
+                    >
+                      {letter}
+                    </span>
+
+                    <span className="pt-1">{option || "—"}</span>
+                  </button>
+                ))}
+              </div>
+            </article>
+
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+              <button
+                disabled={currentIndex === 0 || submitting}
+                onClick={() =>
+                  setCurrentIndex((i) => Math.max(0, i - 1))
+                }
+                className="rounded-xl border border-white/10 px-5 py-3 font-bold disabled:opacity-30"
+              >
+                ← Previous
+              </button>
+
+              <p className="text-sm text-slate-400">
+                Answered {Object.keys(answers).length} / {questions.length}
+              </p>
+
+              {currentIndex < questions.length - 1 ? (
+                <button
+                  disabled={submitting}
+                  onClick={() =>
+                    setCurrentIndex((i) =>
+                      Math.min(questions.length - 1, i + 1)
+                    )
+                  }
+                  className="rounded-xl bg-cyan-400 px-5 py-3 font-black text-slate-950 disabled:opacity-50"
+                >
+                  Next →
+                </button>
+              ) : (
+                <button
+                  disabled={submitting}
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        "Submit your test now? You cannot change answers after submission."
+                      )
+                    ) {
+                      void submitTest();
+                    }
+                  }}
+                  className="rounded-xl bg-emerald-400 px-5 py-3 font-black text-slate-950 disabled:opacity-50"
+                >
+                  {submitting ? "Submitting..." : "Submit Test"}
+                </button>
+              )}
+            </div>
+
+            <div className="mt-5 flex flex-wrap gap-2">
+              {questions.map((question, index) => (
+                <button
+                  key={question.id}
+                  onClick={() => setCurrentIndex(index)}
+                  aria-label={`Go to question ${index + 1}`}
+                  className={`h-10 w-10 rounded-lg border text-sm font-bold ${
+                    currentIndex === index
+                      ? "border-cyan-400 bg-cyan-400 text-slate-950"
+                      : answers[question.id]
+                        ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
+                        : "border-white/10 bg-white/5 text-slate-400"
+                  }`}
+                >
+                  {index + 1}
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
+      </div>
+    </main>
   );
 }
 
-function Stat({
+function Summary({
   label,
   value,
 }: {
   label: string;
-  value: string;
+  value: number;
 }) {
   return (
-    <div className="rounded-xl border border-white/10 bg-black/20 p-3 text-center">
-      <p className="text-xs text-slate-600">
-        {label}
-      </p>
-
-      <p className="mt-1 font-black">
-        {value}
-      </p>
-    </div>
-  );
-}
-function ResultCard({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-      <p className="text-xs text-slate-500">
-        {label}
-      </p>
-
-      <p className="mt-2 text-2xl font-black">
-        {value}
-      </p>
+    <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+      <p className="text-xs text-slate-400">{label}</p>
+      <p className="mt-2 text-2xl font-black">{value}</p>
     </div>
   );
 }

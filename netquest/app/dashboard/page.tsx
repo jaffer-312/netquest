@@ -1,866 +1,848 @@
+
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { createClient } from "../../utils/supabase/client";
+
+type Student = {
+  student_id: string;
+  student_name: string;
+};
+
+type Result = {
+  id: number;
+  test_id: number;
+  score: number;
+  total_marks: number;
+  percentage: number;
+  created_at: string;
+  correct_answers: number;
+  wrong_answers: number;
+  duration_seconds: number | null;
+};
 
 type Test = {
   id: number;
   title: string;
-  description: string;
-  category: string;
-  difficulty: string;
+  description: string | null;
+  category: string | null;
+  difficulty: string | null;
   duration_minutes: number;
   question_count: number;
   total_marks: number;
-  is_enabled: boolean;
+};
+
+type ResultAnswer = {
+  result_id: number;
+  category: string | null;
+  is_correct: boolean;
+  marks_awarded: number | null;
+};
+
+type CategoryStat = {
+  category: string;
+  total: number;
+  correct: number;
+  wrong: number;
+  accuracy: number;
 };
 
 export default function DashboardPage() {
-  const supabase = createClient();
+  const router = useRouter();
 
+  const [student, setStudent] = useState<Student | null>(null);
+  const [results, setResults] = useState<Result[]>([]);
   const [tests, setTests] = useState<Test[]>([]);
-  const [allTests, setAllTests] = useState<Test[]>([]);
+  const [resultAnswers, setResultAnswers] = useState<ResultAnswer[]>([]);
   const [loading, setLoading] = useState(true);
-  const [studentName, setStudentName] = useState("");
-  const [studentId, setStudentId] = useState("");
-  const [results, setResults] = useState<any[]>([]);
-  const [leaderboardRank, setLeaderboardRank] = useState("--");
-  const [showIdentityGate, setShowIdentityGate] = useState(false);
-  const [identityName, setIdentityName] = useState("");
+  const [signingOut, setSigningOut] = useState(false);
+  const [error, setError] = useState("");
 
+  const loadDashboard = useCallback(async () => {
+    const supabase = createClient();
 
-useEffect(() => {
-  const savedName = localStorage.getItem("netquest_student_name");
-  const savedStudentId = localStorage.getItem("netquest_student_id");
+    setLoading(true);
+    setError("");
 
-  if (savedName) {
-    setStudentName(savedName);
-  }
+    try {
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
 
-  if (savedStudentId) {
-    setStudentId(savedStudentId);
-    loadStudentResults(savedStudentId);
-  } else {
-    setShowIdentityGate(true);
-  }
+      if (authError || !user) {
+        router.replace("/student/login");
+        return;
+      }
 
-  loadTests();
-}, []);
+      const { data: profile, error: profileError } = await supabase
+        .from("students")
+        .select("student_id, student_name")
+        .eq("auth_user_id", user.id)
+        .maybeSingle();
 
-async function loadStudentResults(studentIdValue: string) {
-  const { data, error } = await supabase
-    .from("results")
-    .select("*")
-    .eq("student_id", studentIdValue)
-    .order("created_at", { ascending: false });
+      if (profileError) throw profileError;
 
-  if (error) {
-    console.error("DASHBOARD RESULTS LOAD ERROR:", error);
-    return;
-  }
+      if (!profile) {
+        setError(
+          "Your student profile was not found. Please contact the NetQuest administrator."
+        );
+        return;
+      }
 
-  setResults(data || []);
+      setStudent(profile as Student);
 
-  const { data: allResults, error: allResultsError } = await supabase
-    .from("results")
-    .select("student_id, percentage");
+      const [resultResponse, testResponse] = await Promise.all([
+        supabase
+          .from("results")
+          .select(
+            "id, test_id, score, total_marks, percentage, created_at, correct_answers, wrong_answers, duration_seconds"
+          )
+          .eq("student_id", profile.student_id)
+          .order("created_at", { ascending: false }),
 
-  if (allResultsError) {
-    console.error("LEADERBOARD DATA LOAD ERROR:", allResultsError);
-    return;
-  }
+        supabase
+          .from("tests")
+          .select(
+            "id, title, description, category, difficulty, duration_minutes, question_count, total_marks"
+          )
+          .eq("is_enabled", true)
+          .order("created_at", { ascending: false }),
+      ]);
 
-  const studentBestScores: Record<string, number> = {};
+      if (resultResponse.error) throw resultResponse.error;
+      if (testResponse.error) throw testResponse.error;
 
-  (allResults || []).forEach((result) => {
-    if (!result.student_id) return;
+      const fetchedResults = (resultResponse.data || []) as Result[];
 
-    const percentage = Number(result.percentage) || 0;
+      setResults(fetchedResults);
+      setTests((testResponse.data || []) as Test[]);
 
-    if (
-      studentBestScores[result.student_id] === undefined ||
-      percentage > studentBestScores[result.student_id]
-    ) {
-      studentBestScores[result.student_id] = percentage;
+      if (fetchedResults.length > 0) {
+        const resultIds = fetchedResults.map((result) => result.id);
+
+        const { data: answerData, error: answerError } = await supabase
+          .from("result_answers")
+          .select("result_id, category, is_correct, marks_awarded")
+          .in("result_id", resultIds);
+
+        if (answerError) {
+          console.warn(
+            "Dashboard category analysis unavailable:",
+            answerError.message
+          );
+          setResultAnswers([]);
+        } else {
+          setResultAnswers((answerData || []) as ResultAnswer[]);
+        }
+      } else {
+        setResultAnswers([]);
+      }
+    } catch (err) {
+      console.error("Dashboard loading error:", err);
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to load your dashboard."
+      );
+    } finally {
+      setLoading(false);
     }
-  });
+  }, [router]);
 
-  const rankedStudents = Object.entries(studentBestScores).sort(
-    (a, b) => b[1] - a[1]
+  useEffect(() => {
+    void loadDashboard();
+  }, [loadDashboard]);
+
+  async function handleLogout() {
+    setSigningOut(true);
+
+    try {
+      const supabase = createClient();
+      const { error: logoutError } = await supabase.auth.signOut();
+
+      if (logoutError) throw logoutError;
+
+      localStorage.removeItem("netquest_student_id");
+      localStorage.removeItem("netquest_student_name");
+
+      router.replace("/student/login");
+      router.refresh();
+    } catch (err) {
+      console.error("Logout error:", err);
+
+      setError(
+        err instanceof Error ? err.message : "Unable to log out."
+      );
+
+      setSigningOut(false);
+    }
+  }
+
+  const bestPercentage = results.length
+    ? Math.max(...results.map((r) => Number(r.percentage) || 0))
+    : 0;
+
+  const averagePercentage = results.length
+    ? Math.round(
+        results.reduce(
+          (sum, r) => sum + (Number(r.percentage) || 0),
+          0
+        ) / results.length
+      )
+    : 0;
+
+  const averageDurationResults = results.filter(
+    (result) =>
+      result.duration_seconds !== null &&
+      result.duration_seconds !== undefined
   );
 
-  const rank =
-    rankedStudents.findIndex(
-      ([studentId]) => studentId === studentIdValue
-    ) + 1;
+  const averageDuration = averageDurationResults.length
+    ? Math.round(
+        averageDurationResults.reduce(
+          (sum, result) => sum + Number(result.duration_seconds),
+          0
+        ) / averageDurationResults.length
+      )
+    : null;
 
-  setLeaderboardRank(rank > 0 ? `#${rank}` : "--");
-}
+  const categoryStats = useMemo<CategoryStat[]>(() => {
+    const grouped = new Map<
+      string,
+      { total: number; correct: number; wrong: number }
+    >();
 
-async function continueAsStudent() {
-  const cleanName = identityName.trim();
+    for (const answer of resultAnswers) {
+      const category = answer.category || "Uncategorized";
 
-  if (!cleanName) {
-    alert("Please enter your name.");
-    return;
-  }
+      const current = grouped.get(category) ?? {
+        total: 0,
+        correct: 0,
+        wrong: 0,
+      };
 
-  const { data: existingStudent, error: existingError } = await supabase
-    .from("students")
-    .select("student_id, student_name")
-    .eq("student_name", cleanName)
-    .maybeSingle();
+      current.total += 1;
 
-  if (existingError) {
-    console.error("STUDENT LOOKUP ERROR:", existingError);
-    alert("Unable to find your Student ID.");
-    return;
-  }
+      if (answer.is_correct) {
+        current.correct += 1;
+      } else {
+        current.wrong += 1;
+      }
 
-  let finalStudentId = existingStudent?.student_id;
-  let finalStudentName = existingStudent?.student_name || cleanName;
-
-  if (!finalStudentId) {
-    const { data: newStudent, error: createError } = await supabase
-      .from("students")
-      .insert({
-        student_name: cleanName,
-      })
-      .select("student_id, student_name")
-      .single();
-
-    if (createError) {
-      console.error("STUDENT CREATE ERROR:", createError);
-      alert("Unable to create your Student ID.");
-      return;
+      grouped.set(category, current);
     }
 
-    finalStudentId = newStudent.student_id;
-    finalStudentName = newStudent.student_name;
+    return Array.from(grouped.entries())
+      .map(([category, stats]) => ({
+        category,
+        ...stats,
+        accuracy: stats.total
+          ? Math.round((stats.correct / stats.total) * 100)
+          : 0,
+      }))
+      .sort((a, b) => a.accuracy - b.accuracy);
+  }, [resultAnswers]);
+
+  const progressTrend = useMemo(() => {
+    return [...results]
+      .sort(
+        (a, b) =>
+          new Date(a.created_at).getTime() -
+          new Date(b.created_at).getTime()
+      )
+      .slice(-8);
+  }, [results]);
+
+  const recentImprovement = useMemo(() => {
+    if (progressTrend.length < 2) return null;
+
+    const previous = Number(
+      progressTrend[progressTrend.length - 2].percentage
+    ) || 0;
+
+    const latest = Number(
+      progressTrend[progressTrend.length - 1].percentage
+    ) || 0;
+
+    return Math.round((latest - previous) * 10) / 10;
+  }, [progressTrend]);
+
+  const weakestCategory = categoryStats[0] ?? null;
+
+  const testTitle = (testId: number) =>
+    tests.find((test) => test.id === testId)?.title ??
+    `Test #${testId}`;
+
+  function formatDuration(seconds: number | null) {
+    if (seconds === null || seconds === undefined) {
+      return "Not recorded";
+    }
+
+    const safeSeconds = Math.max(0, Math.floor(Number(seconds)));
+    const minutes = Math.floor(safeSeconds / 60);
+    const remaining = safeSeconds % 60;
+
+    if (minutes >= 60) {
+      const hours = Math.floor(minutes / 60);
+      const remainingMinutes = minutes % 60;
+      return `${hours}h ${remainingMinutes}m`;
+    }
+
+    return `${minutes}m ${remaining}s`;
   }
 
-  localStorage.setItem("netquest_student_id", finalStudentId);
-  localStorage.setItem("netquest_student_name", finalStudentName);
-
-  setStudentId(finalStudentId);
-  setStudentName(finalStudentName);
-  setIdentityName("");
-  setShowIdentityGate(false);
-
-  await loadStudentResults(finalStudentId);
-}
-
-async function loadTests() {
-    setLoading(true);
-
-    const { data, error } = await supabase
-      .from("tests")
-      .select("*")
-      .eq("is_enabled", true)
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      console.error("DASHBOARD TEST LOAD ERROR:", error);
-      setLoading(false);
-      return;
-    }
-
-    setTests(data || []);
-
-    // Keep all challenge titles available for performance/history,
-    // including challenges that may no longer be active.
-    const { data: allTestData, error: allTestError } = await supabase
-      .from("tests")
-      .select("*")
-      .order("created_at", { ascending: false });
-
-    if (allTestError) {
-      console.error("DASHBOARD ALL TESTS LOAD ERROR:", allTestError);
-    } else {
-      setAllTests(allTestData || []);
-    }
-
-    setLoading(false);
+  if (loading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[#050816] text-white">
+        <div className="text-center">
+          <div className="text-5xl">⚡</div>
+          <p className="mt-4 text-slate-400">
+            Loading your NetQuest dashboard...
+          </p>
+        </div>
+      </main>
+    );
   }
 
   return (
-    <>
-      {showIdentityGate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-5 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-3xl border border-cyan-400/20 bg-[#0b1024] p-8 shadow-2xl">
-            <div className="text-center">
-              <div className="text-5xl">🎮</div>
+    <main className="min-h-screen bg-[#050816] px-4 py-6 text-white sm:px-8">
+      <div className="mx-auto max-w-7xl">
 
-              <p className="mt-5 text-xs font-bold uppercase tracking-[0.3em] text-cyan-400">
-                NETQUEST
-              </p>
-
-              <h2 className="mt-3 text-3xl font-black">
-                Welcome to NetQuest
-              </h2>
-
-              <p className="mt-3 text-sm leading-6 text-slate-400">
-                Enter your name to continue. Your existing Student ID will be
-                loaded automatically, or a new one will be created.
-              </p>
-
-              <input
-                value={identityName}
-                onChange={(e) => setIdentityName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    continueAsStudent();
-                  }
-                }}
-                placeholder="Enter your name"
-                className="mt-6 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-cyan-400"
-              />
-
-              <button
-                onClick={continueAsStudent}
-                className="mt-4 w-full rounded-xl bg-cyan-400 py-3 font-black text-slate-950 transition hover:scale-[1.02]"
-              >
-                CONTINUE 🚀
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <main className="min-h-screen bg-[#050816] px-5 py-8 text-white">
-      <div className="mx-auto max-w-6xl">
-
-        {/* HEADER */}
-        <header className="mb-10 flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
+        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-6">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.3em] text-cyan-400">
               NETQUEST
             </p>
 
- <h1 className="mt-3 text-4xl font-black md:text-5xl">
-  Welcome{studentName ? `, ${studentName}` : ""} 👋
-</h1>
+            <h1 className="mt-2 text-3xl font-black sm:text-4xl">
+              Student Dashboard
+            </h1>
 
-{studentId && (
-  <p className="mt-2 text-lg font-bold text-cyan-400">
-    Student ID: {studentId}
-  </p>
-)}
-
-<p className="mt-2 text-2xl font-black text-white">
-  Your Networking Arena 🎮
-</p>
-
-            <p className="mt-3 text-slate-400">
-              Choose a challenge. Test your skills. Climb the leaderboard.
+            <p className="mt-2 text-slate-400">
+              Learn. Practice. Compete.
             </p>
           </div>
 
-          <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 px-5 py-3">
-            <p className="text-xs uppercase tracking-wider text-slate-500">
-              Status
-            </p>
-            <p className="mt-1 font-black text-cyan-400">
-              🟢 LIVE
-            </p>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href="/history"
+              className="rounded-xl border border-white/10 px-4 py-3 font-bold hover:bg-white/5"
+            >
+              My History
+            </Link>
+
+            <button
+              onClick={handleLogout}
+              disabled={signingOut}
+              className="rounded-xl bg-red-500/10 px-4 py-3 font-bold text-red-300 hover:bg-red-500/20 disabled:opacity-50"
+            >
+              {signingOut ? "Logging out..." : "Logout"}
+            </button>
           </div>
         </header>
 
-        {/* STATS */}
-<section className="mb-12 grid gap-5 sm:grid-cols-3">
-
-  {/* ACTIVE CHALLENGES */}
-  <div className="group relative overflow-hidden rounded-3xl border border-cyan-400/20 bg-gradient-to-br from-cyan-400/[0.12] to-white/[0.03] p-6 transition duration-300 hover:-translate-y-1 hover:border-cyan-400/40">
-    <div className="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-cyan-400/10 blur-2xl" />
-
-    <div className="relative">
-      <div className="flex items-center justify-between">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-400/10 text-2xl">
-          🎯
-        </div>
-
-        <span className="text-4xl font-black text-cyan-400">
-          {loading ? "..." : tests.length}
-        </span>
-      </div>
-
-      <p className="mt-5 text-sm font-bold uppercase tracking-wider text-slate-500">
-        Active Challenges
-      </p>
-
-      <p className="mt-1 text-xs text-slate-600">
-        Challenges available to you
-      </p>
-    </div>
-  </div>
-
-  {/* LEADERBOARD RANK */}
-  <div className="group relative overflow-hidden rounded-3xl border border-yellow-400/20 bg-gradient-to-br from-yellow-400/[0.10] to-white/[0.03] p-6 transition duration-300 hover:-translate-y-1 hover:border-yellow-400/40">
-    <div className="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-yellow-400/10 blur-2xl" />
-
-    <div className="relative">
-      <div className="flex items-center justify-between">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-yellow-400/10 text-2xl">
-          🏆
-        </div>
-
-        <span className="text-4xl font-black text-yellow-400">
-          {leaderboardRank}
-        </span>
-      </div>
-
-      <p className="mt-5 text-sm font-bold uppercase tracking-wider text-slate-500">
-        Leaderboard Rank
-      </p>
-
-      <p className="mt-1 text-xs text-slate-600">
-        Your current position
-      </p>
-    </div>
-  </div>
-
-  {/* BEST SCORE */}
-  <div className="group relative overflow-hidden rounded-3xl border border-purple-400/20 bg-gradient-to-br from-purple-400/[0.10] to-white/[0.03] p-6 transition duration-300 hover:-translate-y-1 hover:border-purple-400/40">
-    <div className="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-purple-400/10 blur-2xl" />
-
-    <div className="relative">
-      <div className="flex items-center justify-between">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-purple-400/10 text-2xl">
-          ⭐
-        </div>
-
-        <span className="text-4xl font-black text-purple-400">
-          {results.length > 0
-            ? `${Math.max(
-                ...results.map((r) => Number(r.percentage) || 0)
-              )}%`
-            : "--"}
-        </span>
-      </div>
-
-      <p className="mt-5 text-sm font-bold uppercase tracking-wider text-slate-500">
-        My Best Score
-      </p>
-
-      <p className="mt-1 text-xs text-slate-600">
-        Highest percentage achieved
-      </p>
-    </div>
-  </div>
-
-</section>
-       
-
-        {/* MY PROFILE */}
-        <section className="mt-12">
-          <div className="mb-5">
-            <p className="text-xs font-bold uppercase tracking-[0.25em] text-cyan-400">
-              Student Profile
-            </p>
-            <h2 className="mt-2 text-3xl font-black">
-              👤 My NetQuest Profile
+        {error && (
+          <section
+            role="alert"
+            className="mt-6 rounded-2xl border border-red-400/30 bg-red-950/30 p-5"
+          >
+            <h2 className="font-bold text-red-300">
+              Something needs attention
             </h2>
-            <p className="mt-2 text-slate-500">
-              Your Student ID and overall challenge performance.
+
+            <p className="mt-2 break-words text-sm text-red-200">
+              {error}
             </p>
-          </div>
 
-          <div className="grid gap-5 lg:grid-cols-[1.15fr_1fr]">
-            <div className="rounded-3xl border border-cyan-400/20 bg-gradient-to-br from-cyan-400/[0.10] to-white/[0.03] p-7">
-              <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">
-                    Student
-                  </p>
-                  <h3 className="mt-2 text-3xl font-black">
-                    {studentName || "NetQuest Student"}
-                  </h3>
-                  <p className="mt-2 font-bold text-cyan-400">
-                    {studentId || "Student ID pending"}
-                  </p>
-                </div>
-                <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-cyan-400/10 text-4xl">
-                  🎓
-                </div>
-              </div>
+            <button
+              onClick={() => void loadDashboard()}
+              className="mt-4 rounded-lg bg-white/10 px-4 py-2 font-bold hover:bg-white/20"
+            >
+              Try Again
+            </button>
+          </section>
+        )}
 
-              <div className="mt-7 grid grid-cols-2 gap-3">
-                <MiniStat label="Attempts" value={results.length.toString()} />
-                <MiniStat
-                  label="Challenges"
-                  value={new Set(results.map((r) => r.test_id)).size.toString()}
+        {student && (
+          <>
+            <section className="mt-8 rounded-3xl border border-cyan-400/20 bg-gradient-to-r from-cyan-400/10 to-blue-500/5 p-6 sm:p-8">
+              <p className="text-sm font-bold text-cyan-400">
+                WELCOME BACK 👋
+              </p>
+
+              <h2 className="mt-3 text-3xl font-black sm:text-4xl">
+                {student.student_name}
+              </h2>
+
+              <p className="mt-3 text-slate-400">
+                Your permanent Student ID
+              </p>
+
+              <p className="mt-1 text-xl font-black text-cyan-300">
+                {student.student_id}
+              </p>
+            </section>
+
+            {/* OVERALL PERFORMANCE */}
+
+            <section className="mt-8">
+              <SectionHeading
+                title="Your Performance Overview"
+                subtitle="Your learning progress based on submitted test attempts."
+              />
+
+              <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                <StatCard
+                  label="Total Attempts"
+                  value={String(results.length)}
+                  icon="📝"
+                />
+
+                <StatCard
+                  label="Best Score"
+                  value={results.length ? `${bestPercentage}%` : "--"}
+                  icon="🏆"
+                />
+
+                <StatCard
+                  label="Average Score"
+                  value={results.length ? `${averagePercentage}%` : "--"}
+                  icon="📈"
+                />
+
+                <StatCard
+                  label="Average Time"
+                  value={
+                    averageDuration !== null
+                      ? formatDuration(averageDuration)
+                      : "--"
+                  }
+                  icon="⏱️"
+                />
+
+                <StatCard
+                  label="Available Tests"
+                  value={String(tests.length)}
+                  icon="🎯"
                 />
               </div>
-            </div>
+            </section>
 
-            <div className="grid grid-cols-2 gap-4">
-              <ProfileMetric
-                icon="🏆"
-                label="Best %"
-                value={
-                  results.length > 0
-                    ? `${Math.max(...results.map((r) => Number(r.percentage) || 0))}%`
-                    : "--"
-                }
-              />
-              <ProfileMetric
-                icon="📈"
-                label="Average %"
-                value={
-                  results.length > 0
-                    ? `${Math.round(
-                        results.reduce(
-                          (sum, r) => sum + (Number(r.percentage) || 0),
-                          0
-                        ) / results.length
-                      )}%`
-                    : "--"
-                }
-              />
-              <ProfileMetric
-                icon="🎯"
-                label="Correct"
-                value={
-                  results.length > 0
-                    ? results
-                        .reduce(
-                          (sum, r) => sum + (Number(r.correct_answers) || 0),
-                          0
-                        )
-                        .toString()
-                    : "0"
-                }
-              />
-              <ProfileMetric
-                icon="🥇"
-                label="Rank"
-                value={leaderboardRank}
-              />
-            </div>
-          </div>
-        </section>
+            {/* PROGRESS TREND */}
 
-        {/* ACTIVE CHALLENGES */}
-        <section>
-          <div className="mb-5 flex items-end justify-between">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-[0.25em] text-cyan-400">
-                Challenge Zone
-              </p>
+            <section className="mt-10 rounded-3xl border border-white/10 bg-white/[0.03] p-6">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <SectionHeading
+                  title="Progress Trend"
+                  subtitle="Your latest eight attempts, shown in chronological order."
+                />
 
-              <h2 className="mt-2 text-3xl font-black">
-                🔥 Active Challenges
-              </h2>
-            </div>
-
-            <span className="text-sm text-slate-500">
-              {tests.length} available
-            </span>
-          </div>
-
-          {loading ? (
-            <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-12 text-center">
-              <div className="text-4xl">⚡</div>
-              <p className="mt-3 text-slate-400">
-                Loading challenges...
-              </p>
-            </div>
-          ) : tests.length === 0 ? (
-            <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-12 text-center">
-              <div className="text-5xl">📭</div>
-
-              <h3 className="mt-4 text-xl font-black">
-                No active challenges
-              </h3>
-
-              <p className="mt-2 text-slate-500">
-                New challenges will appear here when they are activated.
-              </p>
-            </div>
-          ) : (
-            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-              {tests.map((test) => (
-                <ChallengeCard key={test.id} test={test} />
-              ))}
-            </div>
-          )}
-        </section>
-
-                {/* MY PERFORMANCE */}
-        <section className="mt-12">
-          <div className="mb-5">
-            <p className="text-xs font-bold uppercase tracking-[0.25em] text-cyan-400">
-              Performance
-            </p>
-
-            <h2 className="mt-2 text-3xl font-black">
-              📊 My Challenge Performance
-            </h2>
-
-            <p className="mt-2 text-slate-500">
-              Track your attempts, best scores and average performance.
-            </p>
-          </div>
-
-          {results.length === 0 ? (
-            <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-8 text-center">
-              <div className="text-4xl">🎮</div>
-
-              <p className="mt-3 text-slate-400">
-                You have not attempted any challenge yet.
-              </p>
-            </div>
-          ) : (
-            <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
-              {tests.map((test) => {
-                const challengeResults = results.filter(
-                  (result) => result.test_id === test.id
-                );
-
-                if (challengeResults.length === 0) {
-                  return null;
-                }
-
-                const attempts = challengeResults.length;
-
-                const bestPercentage = Math.max(
-                  ...challengeResults.map(
-                    (result) => Number(result.percentage) || 0
-                  )
-                );
-
-                const averagePercentage =
-                  challengeResults.reduce(
-                    (sum, result) =>
-                      sum + (Number(result.percentage) || 0),
-                    0
-                  ) / attempts;
-
-                const bestScore = Math.max(
-                  ...challengeResults.map(
-                    (result) => Number(result.score) || 0
-                  )
-                );
-
-                const totalMarks =
-                  challengeResults[0]?.total_marks || test.total_marks;
-
-                return (
-                  <div
-                    key={test.id}
-                    className="rounded-3xl border border-white/10 bg-white/[0.03] p-6"
+                {recentImprovement !== null && (
+                  <span
+                    className={`rounded-full px-3 py-2 text-sm font-bold ${
+                      recentImprovement > 0
+                        ? "bg-emerald-400/10 text-emerald-300"
+                        : recentImprovement < 0
+                          ? "bg-rose-400/10 text-rose-300"
+                          : "bg-white/10 text-slate-300"
+                    }`}
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-bold uppercase tracking-wider text-cyan-400">
-                          Challenge
-                        </p>
-
-                        <h3 className="mt-2 text-xl font-black">
-                          {test.title}
-                        </h3>
-                      </div>
-
-                      <span className="rounded-full bg-cyan-400/10 px-3 py-1 text-xs font-bold text-cyan-400">
-                        {test.difficulty}
-                      </span>
-                    </div>
-
-                    <div className="mt-6 grid grid-cols-2 gap-3">
-                      <MiniStat
-                        label="Attempts"
-                        value={attempts.toString()}
-                      />
-
-                      <MiniStat
-                        label="Best Score"
-                        value={`${bestScore}/${totalMarks}`}
-                      />
-
-                      <MiniStat
-                        label="Best %"
-                        value={`${bestPercentage}%`}
-                      />
-
-                      <MiniStat
-                        label="Average"
-                        value={`${Math.round(averagePercentage)}%`}
-                      />
-
-                      <MiniStat
-                        label="Rank"
-                          value="--"
-/>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
-
-        {/* RECENT ATTEMPTS */}
-        <section className="mt-12">
-          <div className="mb-5">
-            <p className="text-xs font-bold uppercase tracking-[0.25em] text-cyan-400">
-              Activity
-            </p>
-            <h2 className="mt-2 text-3xl font-black">
-              🕘 Recent Attempts
-            </h2>
-            <p className="mt-2 text-slate-500">
-              Your latest challenge submissions.
-            </p>
-          </div>
-
-          {results.length === 0 ? (
-            <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-8 text-center">
-              <div className="text-4xl">📭</div>
-              <p className="mt-3 text-slate-400">
-                No attempts yet. Start a challenge to build your history.
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-hidden rounded-3xl border border-white/10 bg-white/[0.03]">
-              <div className="hidden grid-cols-[1.6fr_0.8fr_0.8fr_0.8fr_1.2fr] gap-4 border-b border-white/10 px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500 md:grid">
-                <span>Challenge</span>
-                <span>Score</span>
-                <span>Percentage</span>
-                <span>Result</span>
-                <span>Date</span>
+                    {recentImprovement > 0 ? "+" : ""}
+                    {recentImprovement}% vs previous attempt
+                  </span>
+                )}
               </div>
 
-              <div className="divide-y divide-white/10">
-                {results.slice(0, 8).map((result) => {
-                  const test = allTests.find((item) => item.id === result.test_id);
-                  const percentage = Number(result.percentage) || 0;
+              {progressTrend.length === 0 ? (
+                <EmptyState message="Complete your first test to see your performance trend." />
+              ) : (
+                <>
+                  <div className="mt-8 flex h-56 items-end gap-3 overflow-x-auto border-b border-white/10 pb-2">
+                    {progressTrend.map((result, index) => {
+                      const percentage = Math.min(
+                        100,
+                        Math.max(0, Number(result.percentage) || 0)
+                      );
 
-                  return (
-                    <div
-                      key={result.id}
-                      className="grid gap-3 px-6 py-5 transition hover:bg-white/[0.03] md:grid-cols-[1.6fr_0.8fr_0.8fr_0.8fr_1.2fr] md:items-center md:gap-4"
+                      return (
+                        <div
+                          key={result.id}
+                          className="flex h-full min-w-12 flex-1 flex-col items-center justify-end gap-2"
+                        >
+                          <span className="text-xs font-bold text-cyan-300">
+                            {percentage}%
+                          </span>
+
+                          <div className="flex h-40 w-full items-end justify-center">
+                            <div
+                              title={`Attempt ${index + 1}: ${percentage}%`}
+                              className="w-full max-w-12 rounded-t-lg bg-gradient-to-t from-blue-600 to-cyan-300 transition-all"
+                              style={{
+                                height: `${Math.max(percentage, 2)}%`,
+                              }}
+                            />
+                          </div>
+
+                          <span className="text-xs text-slate-500">
+                            #{index + 1}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <p className="mt-3 text-xs text-slate-500">
+                    Oldest attempt on the left · Latest attempt on the right
+                  </p>
+                </>
+              )}
+            </section>
+
+            {/* CATEGORY PERFORMANCE */}
+
+            <section className="mt-10 rounded-3xl border border-white/10 bg-white/[0.03] p-6">
+              <SectionHeading
+                title="Category-wise Performance"
+                subtitle="Identify your strong areas and topics that need more practice."
+              />
+
+              {categoryStats.length === 0 ? (
+                <EmptyState message="Category analysis will appear after question-level answer records are available." />
+              ) : (
+                <div className="mt-6 grid gap-4 md:grid-cols-2">
+                  {categoryStats.map((stat) => (
+                    <article
+                      key={stat.category}
+                      className="rounded-2xl border border-white/10 bg-black/20 p-5"
                     >
-                      <div>
-                        <p className="font-black">
-                          {test?.title || `Challenge #${result.test_id}`}
-                        </p>
-                        <p className="mt-1 text-xs text-slate-600">
-                          Attempt #{result.id}
-                        </p>
-                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <h3 className="font-black">
+                          {stat.category}
+                        </h3>
 
-                      <div className="text-sm font-bold">
-                        {result.score}/{result.total_marks}
-                      </div>
-
-                      <div className="font-black text-cyan-400">
-                        {percentage}%
-                      </div>
-
-                      <div>
                         <span
-                          className={`rounded-full px-3 py-1 text-xs font-bold ${
-                            percentage >= 80
-                              ? "bg-green-400/10 text-green-400"
-                              : percentage >= 50
-                                ? "bg-yellow-400/10 text-yellow-400"
-                                : "bg-red-400/10 text-red-400"
+                          className={`text-lg font-black ${
+                            stat.accuracy < 50
+                              ? "text-rose-300"
+                              : stat.accuracy < 75
+                                ? "text-yellow-300"
+                                : "text-emerald-300"
                           }`}
                         >
-                          {percentage >= 80
-                            ? "Excellent"
-                            : percentage >= 50
-                              ? "Keep Going"
-                              : "Practice More"}
+                          {stat.accuracy}%
                         </span>
                       </div>
 
-                      <div className="text-sm text-slate-500">
-                        {result.created_at
-                          ? new Date(result.created_at).toLocaleString("en-IN", {
-                              day: "2-digit",
-                              month: "short",
-                              year: "numeric",
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })
-                          : "--"}
+                      <p className="mt-2 text-xs text-slate-400">
+                        {stat.correct} correct · {stat.wrong} incorrect · {stat.total} questions
+                      </p>
+
+                      <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10">
+                        <div
+                          className={`h-full rounded-full ${
+                            stat.accuracy < 50
+                              ? "bg-rose-400"
+                              : stat.accuracy < 75
+                                ? "bg-yellow-400"
+                                : "bg-emerald-400"
+                          }`}
+                          style={{
+                            width: `${stat.accuracy}%`,
+                          }}
+                        />
                       </div>
-                    </div>
-                  );
-                })}
+                    </article>
+                  ))}
+                </div>
+              )}
+
+              {weakestCategory && (
+                <div className="mt-6 rounded-2xl border border-yellow-400/20 bg-yellow-400/5 p-5">
+                  <p className="text-xs font-bold uppercase tracking-wider text-yellow-300">
+                    Recommended Improvement Area
+                  </p>
+
+                  <h3 className="mt-2 text-xl font-black">
+                    {weakestCategory.category}
+                  </h3>
+
+                  <p className="mt-2 text-sm leading-6 text-slate-300">
+                    {weakestCategory.accuracy < 50
+                      ? `Your accuracy is ${weakestCategory.accuracy}% in this category. Revise the fundamentals and practise more questions from this topic.`
+                      : weakestCategory.accuracy < 75
+                        ? `Your accuracy is ${weakestCategory.accuracy}%. A little more practice in this category can improve your overall performance.`
+                        : `Your lowest category accuracy is ${weakestCategory.accuracy}%. Continue practising to maintain and improve your performance.`}
+                  </p>
+                </div>
+              )}
+            </section>
+
+            {/* LEARNING ARENAS */}
+
+            <section className="mt-10">
+              <SectionHeading
+                title="Your Learning Arenas"
+                subtitle="Choose a practice area and improve your skills."
+              />
+
+              <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <ArenaCard
+                  icon="🌐"
+                  title="Networking"
+                  description="CCNA, IP addressing, routing and switching."
+                  href="/arena/networking"
+                />
+
+                <ArenaCard
+                  icon="🕵️"
+                  title="Network Detective"
+                  description="Practice troubleshooting and diagnostics."
+                  href="/arena/network-detective"
+                />
+
+                <ArenaCard
+                  icon="💡"
+                  title="Interview Arena"
+                  description="Prepare for technical interviews and viva."
+                  href="/arena/interview"
+                />
+
+                <ArenaCard
+                  icon="🧠"
+                  title="DSA Arena"
+                  description="Practice data structures and algorithms."
+                  href="/arena/dsa"
+                />
               </div>
-            </div>
-          )}
-        </section>
+            </section>
 
-        {/* QUICK ACCESS */}
-        <section className="mt-12 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+            {/* ACTIVE CHALLENGES */}
 
-          <a
-            href="/leaderboard"
-            className="group rounded-3xl border border-white/10 bg-white/[0.03] p-7 transition hover:-translate-y-1 hover:border-cyan-400/30"
-          >
-            <div className="text-4xl">🏆</div>
+            <section className="mt-10">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <SectionHeading
+                  title="Active Challenges"
+                  subtitle="Published assessments available to you."
+                />
 
-            <h3 className="mt-4 text-2xl font-black">
-              Leaderboard
-            </h3>
+                <Link
+                  href="/test"
+                  className="font-bold text-cyan-300 hover:underline"
+                >
+                  All Tests →
+                </Link>
+              </div>
 
-            <p className="mt-2 text-slate-500">
-              Check scores and see where you stand.
-            </p>
+              {tests.length === 0 ? (
+                <EmptyState message="No active tests are available right now." />
+              ) : (
+                <div className="mt-5 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {tests.map((test) => (
+                    <article
+                      key={test.id}
+                      className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 transition hover:border-cyan-400/30"
+                    >
+                      <p className="text-xs font-bold uppercase tracking-wider text-cyan-400">
+                        {test.category || "General"}
+                      </p>
 
-            <div className="mt-5 font-bold text-cyan-400 transition group-hover:translate-x-1">
-              VIEW LEADERBOARD →
-            </div>
-          </a>
+                      <h3 className="mt-3 text-xl font-black">
+                        {test.title}
+                      </h3>
 
-          <a
-            href="/history"
-            className="group rounded-3xl border border-white/10 bg-white/[0.03] p-7 transition hover:-translate-y-1 hover:border-cyan-400/30"
-          >
-            <div className="text-4xl">📜</div>
+                      <p className="mt-2 min-h-10 text-sm text-slate-400">
+                        {test.description ||
+                          "Test your knowledge with NetQuest."}
+                      </p>
 
-            <h3 className="mt-4 text-2xl font-black">
-              Attempt History
-            </h3>
+                      <div className="mt-5 grid grid-cols-3 gap-2">
+                        <MiniStat
+                          label="Questions"
+                          value={String(test.question_count ?? 0)}
+                        />
 
-            <p className="mt-2 text-slate-500">
-              Review all your previous challenge attempts and performance.
-            </p>
+                        <MiniStat
+                          label="Marks"
+                          value={String(test.total_marks ?? 0)}
+                        />
 
-            <div className="mt-5 font-bold text-cyan-400 transition group-hover:translate-x-1">
-              VIEW HISTORY →
-            </div>
-          </a>
+                        <MiniStat
+                          label="Minutes"
+                          value={String(test.duration_minutes ?? 0)}
+                        />
+                      </div>
 
-          <a
-            href="/test"
-            className="group rounded-3xl border border-white/10 bg-white/[0.03] p-7 transition hover:-translate-y-1 hover:border-cyan-400/30"
-          >
-            <div className="text-4xl">🎮</div>
+                      <Link
+                        href={`/test?testId=${test.id}`}
+                        className="mt-5 block rounded-xl bg-cyan-400 px-4 py-3 text-center font-black text-slate-950 hover:bg-cyan-300"
+                      >
+                        START TEST →
+                      </Link>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
 
-            <h3 className="mt-4 text-2xl font-black">
-              All Challenges
-            </h3>
+            {/* RECENT ATTEMPTS */}
 
-            <p className="mt-2 text-slate-500">
-              Browse available tests and start your next challenge.
-            </p>
+            <section className="mt-10">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <SectionHeading
+                  title="Recent Attempts"
+                  subtitle="Your latest submitted assessments."
+                />
 
-            <div className="mt-5 font-bold text-cyan-400 transition group-hover:translate-x-1">
-              START CHALLENGE →
-            </div>
-          </a>
+                <Link
+                  href="/history"
+                  className="font-bold text-cyan-300 hover:underline"
+                >
+                  Full History →
+                </Link>
+              </div>
 
-        </section>
+              {results.length === 0 ? (
+                <EmptyState message="You have not attempted a test yet. Choose an active challenge above to get started." />
+              ) : (
+                <div className="mt-5 overflow-x-auto rounded-2xl border border-white/10">
+                  <table className="w-full min-w-[700px] text-left text-sm">
+                    <thead className="bg-white/5 text-xs uppercase text-slate-400">
+                      <tr>
+                        <th className="px-5 py-4">Test</th>
+                        <th className="px-5 py-4">Score</th>
+                        <th className="px-5 py-4">Percentage</th>
+                        <th className="px-5 py-4">Time Taken</th>
+                        <th className="px-5 py-4">Date</th>
+                        <th className="px-5 py-4">Result</th>
+                      </tr>
+                    </thead>
 
-        {/* FOOTER */}
-        <footer className="mt-16 border-t border-white/10 pt-6 text-center text-xs text-slate-600">
-          NETQUEST • Learn • Practice • Compete 🚀
+                    <tbody>
+                      {results.slice(0, 10).map((result) => (
+                        <tr
+                          key={result.id}
+                          className="border-t border-white/10"
+                        >
+                          <td className="px-5 py-4 font-bold">
+                            {testTitle(result.test_id)}
+                          </td>
+
+                          <td className="px-5 py-4">
+                            {result.score}/{result.total_marks}
+                          </td>
+
+                          <td className="px-5 py-4 font-black text-cyan-300">
+                            {Number(result.percentage) || 0}%
+                          </td>
+
+                          <td className="px-5 py-4 text-slate-400">
+                            {formatDuration(result.duration_seconds)}
+                          </td>
+
+                          <td className="px-5 py-4 text-slate-400">
+                            {result.created_at
+                              ? new Date(
+                                  result.created_at
+                                ).toLocaleDateString("en-IN", {
+                                  day: "2-digit",
+                                  month: "short",
+                                  year: "numeric",
+                                })
+                              : "--"}
+                          </td>
+
+                          <td className="px-5 py-4">
+                            <Link
+                              href={`/results/${result.id}`}
+                              className="font-bold text-cyan-300 hover:underline"
+                            >
+                              View →
+                            </Link>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+
+            {/* QUICK LINKS */}
+
+            <section className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <QuickLink
+                icon="📜"
+                title="Attempt History"
+                description="Review your previous test attempts."
+                href="/history"
+              />
+
+              <QuickLink
+                icon="🏆"
+                title="Leaderboard"
+                description="Compare your performance with other students."
+                href="/leaderboard"
+              />
+
+              <QuickLink
+                icon="📚"
+                title="Learning Resources"
+                description="Explore available learning material."
+                href="/learn"
+              />
+            </section>
+          </>
+        )}
+
+        <footer className="mt-12 border-t border-white/10 py-6 text-center text-xs text-slate-500">
+          NETQUEST • Learn • Practice • Compete
         </footer>
-
       </div>
     </main>
-    </>
   );
 }
 
-function ChallengeCard({ test }: { test: Test }) {
-  return (
-    <section className="group rounded-3xl border border-white/10 bg-white/[0.03] p-6 transition duration-300 hover:-translate-y-2 hover:border-cyan-400/40 hover:bg-cyan-400/[0.03]">
-
-      <div className="flex items-center justify-between gap-3">
-        <span className="rounded-full bg-cyan-400/10 px-3 py-1 text-xs font-bold text-cyan-400">
-          {test.category}
-        </span>
-
-        <span className="text-xs font-bold text-slate-500">
-          {test.difficulty}
-        </span>
-      </div>
-
-      <h3 className="mt-5 min-h-14 text-2xl font-black">
-        {test.title}
-      </h3>
-
-      <p className="mt-3 min-h-12 text-sm leading-6 text-slate-500">
-        {test.description || "Test your knowledge with NetQuest."}
-      </p>
-
-      <div className="mt-6 grid grid-cols-3 gap-2">
-        <MiniStat
-          label="Questions"
-          value={test.question_count.toString()}
-        />
-
-        <MiniStat
-          label="Marks"
-          value={test.total_marks.toString()}
-        />
-
-        <MiniStat
-          label="Time"
-          value={`${test.duration_minutes}m`}
-        />
-      </div>
-
-      <a
-         href={`/test?testId=${test.id}`}
-        className="mt-6 block w-full rounded-xl bg-cyan-400 py-3 text-center font-black text-slate-950 transition hover:scale-[1.02]"
-      >
-        START TEST 🚀
-      </a>
-    </section>
-  );
-}
-
-function DashboardStat({
-  icon,
-  label,
-  value,
+function SectionHeading({
+  title,
+  subtitle,
 }: {
-  icon: string;
-  label: string;
-  value: string;
+  title: string;
+  subtitle: string;
 }) {
   return (
-    <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-6">
-      <div className="flex items-center justify-between">
-        <span className="text-3xl">{icon}</span>
+    <div>
+      <h2 className="text-2xl font-black">{title}</h2>
+      <p className="mt-2 text-sm text-slate-400">{subtitle}</p>
+    </div>
+  );
+}
 
-        <span className="text-3xl font-black text-cyan-400">
+function StatCard({
+  label,
+  value,
+  icon,
+}: {
+  label: string;
+  value: string;
+  icon: string;
+}) {
+  return (
+    <article className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-3xl">{icon}</span>
+        <span className="break-words text-right text-2xl font-black text-cyan-300">
           {value}
         </span>
       </div>
 
-      <p className="mt-4 text-sm font-bold text-slate-500">
+      <p className="mt-4 text-sm font-bold text-slate-400">
         {label}
       </p>
-    </div>
-  );
-}
-
-function ProfileMetric({
-  icon,
-  label,
-  value,
-}: {
-  icon: string;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-5 transition hover:-translate-y-1 hover:border-cyan-400/20">
-      <div className="flex items-center justify-between">
-        <span className="text-2xl">{icon}</span>
-        <span className="text-2xl font-black text-cyan-400">{value}</span>
-      </div>
-      <p className="mt-4 text-xs font-bold uppercase tracking-wider text-slate-500">
-        {label}
-      </p>
-    </div>
+    </article>
   );
 }
 
@@ -873,13 +855,74 @@ function MiniStat({
 }) {
   return (
     <div className="rounded-xl border border-white/10 bg-black/20 p-3 text-center">
-      <p className="text-xs text-slate-600">
-        {label}
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className="mt-1 font-black">{value}</p>
+    </div>
+  );
+}
+
+function ArenaCard({
+  icon,
+  title,
+  description,
+  href,
+}: {
+  icon: string;
+  title: string;
+  description: string;
+  href: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 transition hover:-translate-y-1 hover:border-cyan-400/30"
+    >
+      <span className="text-3xl">{icon}</span>
+
+      <h3 className="mt-4 text-lg font-black">{title}</h3>
+
+      <p className="mt-2 text-sm leading-6 text-slate-400">
+        {description}
       </p>
 
-      <p className="mt-1 font-black">
-        {value}
+      <p className="mt-4 font-bold text-cyan-300">
+        Explore →
       </p>
+    </Link>
+  );
+}
+
+function QuickLink({
+  icon,
+  title,
+  description,
+  href,
+}: {
+  icon: string;
+  title: string;
+  description: string;
+  href: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 hover:border-cyan-400/30"
+    >
+      <span className="text-3xl">{icon}</span>
+
+      <h3 className="mt-3 text-lg font-black">{title}</h3>
+
+      <p className="mt-2 text-sm text-slate-400">
+        {description}
+      </p>
+    </Link>
+  );
+}
+
+function EmptyState({ message }: { message: string }) {
+  return (
+    <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.03] p-8 text-center text-slate-400">
+      {message}
     </div>
   );
 }

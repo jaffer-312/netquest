@@ -1,350 +1,470 @@
+
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { createClient } from "../../utils/supabase/client";
+import { useEffect, useState } from "react";
+import Link from "next/link";
 
-const supabase = createClient();
-
-type Result = {
+type Attempt = {
   id: number;
   test_id: number;
-  student_id: string | null;
-  student_name: string;
   score: number;
   total_marks: number;
   percentage: number;
   correct_answers: number;
   wrong_answers: number;
   answered_questions: number;
+  duration_seconds: number | null;
   created_at: string;
+  test: {
+    id: number;
+    title: string;
+    category: string | null;
+    difficulty: string | null;
+  } | null;
+  answers: {
+    result_id: number;
+    question_id: number;
+    selected_answer: string | null;
+    correct_answer: string | null;
+    is_correct: boolean;
+    category: string | null;
+    marks_awarded: number | null;
+    question: string;
+  }[];
 };
 
-type Test = {
-  id: number;
-  title: string;
-  category: string;
-  difficulty: string;
-};
-
-type Attempt = Result & {
-  test?: Test;
+type HistoryResponse = {
+  studentName: string;
+  attempts: Attempt[];
+  error?: string;
 };
 
 export default function HistoryPage() {
-  const [results, setResults] = useState<Result[]>([]);
-  const [tests, setTests] = useState<Test[]>([]);
   const [studentName, setStudentName] = useState("");
-  const [studentId, setStudentId] = useState("");
+  const [attempts, setAttempts] = useState<Attempt[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedAttemptId, setSelectedAttemptId] = useState<number | null>(null);
-  const [showIdentityGate, setShowIdentityGate] = useState(false);
-  const [identityName, setIdentityName] = useState("");
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    const savedName = localStorage.getItem("netquest_student_name");
-    const savedStudentId = localStorage.getItem("netquest_student_id");
+    let active = true;
 
-    if (savedName) setStudentName(savedName);
+    async function loadHistory() {
+      try {
+        const response = await fetch("/api/student/history", {
+          method: "GET",
+          cache: "no-store",
+        });
 
-    if (savedStudentId) {
-      setStudentId(savedStudentId);
-      loadHistory(savedStudentId);
-    } else {
-      setLoading(false);
-      setShowIdentityGate(true);
+        const data: HistoryResponse = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data.error ||
+              (response.status === 401
+                ? "Please log in to view your history."
+                : "Unable to load history.")
+          );
+        }
+
+        if (!active) return;
+
+        setStudentName(data.studentName);
+        setAttempts(data.attempts ?? []);
+        setError("");
+      } catch (err) {
+        if (!active) return;
+
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Unable to load your history."
+        );
+      } finally {
+        if (active) setLoading(false);
+      }
     }
+
+    void loadHistory();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
-  async function continueAsStudent() {
-    const cleanName = identityName.trim();
-    if (!cleanName) {
-      alert("Please enter your name.");
-      return;
-    }
-
-    const { data: existingStudent, error: existingError } = await supabase
-      .from("students")
-      .select("student_id, student_name")
-      .eq("student_name", cleanName)
-      .maybeSingle();
-
-    if (existingError) {
-      console.error("STUDENT LOOKUP ERROR:", existingError);
-      alert("Unable to find your Student ID.");
-      return;
-    }
-
-    let finalStudentId = existingStudent?.student_id;
-    let finalStudentName = existingStudent?.student_name || cleanName;
-
-    if (!finalStudentId) {
-      const { data: newStudent, error: createError } = await supabase
-        .from("students")
-        .insert({ student_name: cleanName })
-        .select("student_id, student_name")
-        .single();
-
-      if (createError) {
-        console.error("STUDENT CREATE ERROR:", createError);
-        alert("Unable to create your Student ID.");
-        return;
-      }
-
-      finalStudentId = newStudent.student_id;
-      finalStudentName = newStudent.student_name;
-    }
-
-    localStorage.setItem("netquest_student_id", finalStudentId);
-    localStorage.setItem("netquest_student_name", finalStudentName);
-    setStudentId(finalStudentId);
-    setStudentName(finalStudentName);
-    setIdentityName("");
-    setShowIdentityGate(false);
-    await loadHistory(finalStudentId);
-  }
-
-  async function loadHistory(studentIdValue: string) {
-    setLoading(true);
-
-    const [{ data: resultData, error: resultError }, { data: testData, error: testError }] =
-      await Promise.all([
-        supabase
-          .from("results")
-          .select("*")
-          .eq("student_id", studentIdValue)
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("tests")
-          .select("id, title, category, difficulty"),
-      ]);
-
-    if (resultError) {
-      console.error("HISTORY RESULTS LOAD ERROR:", resultError);
-      setResults([]);
-    } else {
-      setResults(resultData || []);
-    }
-
-    if (testError) {
-      console.error("HISTORY TEST LOAD ERROR:", testError);
-      setTests([]);
-    } else {
-      setTests(testData || []);
-    }
-
-    setLoading(false);
-  }
-
-  const attempts: Attempt[] = useMemo(() => {
-    const testMap = new Map(tests.map((test) => [test.id, test]));
-    return results.map((result) => ({
-      ...result,
-      test: testMap.get(result.test_id),
-    }));
-  }, [results, tests]);
-
-  const bestPercentage = results.length
-    ? Math.max(...results.map((result) => Number(result.percentage) || 0))
+  const bestPercentage = attempts.length
+    ? Math.max(...attempts.map((a) => Number(a.percentage) || 0))
     : 0;
-  const averagePercentage = results.length
+
+  const averagePercentage = attempts.length
     ? Math.round(
-        results.reduce(
-          (sum, result) => sum + (Number(result.percentage) || 0),
+        attempts.reduce(
+          (sum, a) => sum + (Number(a.percentage) || 0),
           0
-        ) / results.length
+        ) / attempts.length
       )
     : 0;
 
+  const averageDurationAttempts = attempts.filter(
+    (a) => a.duration_seconds !== null &&
+      a.duration_seconds !== undefined
+  );
+
+  const averageDuration = averageDurationAttempts.length
+    ? Math.round(
+        averageDurationAttempts.reduce(
+          (sum, a) => sum + Number(a.duration_seconds),
+          0
+        ) / averageDurationAttempts.length
+      )
+    : null;
+
+  function formatDuration(seconds: number | null | undefined) {
+    if (seconds === null || seconds === undefined) {
+      return "Not recorded";
+    }
+
+    const safeSeconds = Math.max(0, Math.floor(Number(seconds)));
+    const minutes = Math.floor(safeSeconds / 60);
+    const remaining = safeSeconds % 60;
+
+    if (minutes >= 60) {
+      const hours = Math.floor(minutes / 60);
+      const remainingMinutes = minutes % 60;
+      return `${hours}h ${remainingMinutes}m`;
+    }
+
+    return `${minutes}m ${remaining}s`;
+  }
+
   return (
-    <>
-      {showIdentityGate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-5 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-3xl border border-cyan-400/20 bg-[#0b1024] p-8 shadow-2xl">
-            <div className="text-center">
-              <div className="text-5xl">📜</div>
-              <p className="mt-5 text-xs font-bold uppercase tracking-[0.3em] text-cyan-400">
-                NETQUEST
-              </p>
-              <h2 className="mt-3 text-3xl font-black">Your Attempt History</h2>
-              <p className="mt-3 text-sm leading-6 text-slate-400">
-                Enter your name to load your Student ID and previous attempts.
-              </p>
-              <input
-                value={identityName}
-                onChange={(e) => setIdentityName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") continueAsStudent();
-                }}
-                placeholder="Enter your name"
-                className="mt-6 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-cyan-400"
-              />
-              <button
-                onClick={continueAsStudent}
-                className="mt-4 w-full rounded-xl bg-cyan-400 py-3 font-black text-slate-950 transition hover:scale-[1.02]"
-              >
-                CONTINUE 🚀
-              </button>
-            </div>
+    <main className="min-h-screen bg-[#050816] px-4 py-8 text-white sm:px-6">
+      <div className="mx-auto max-w-6xl">
+
+        <header className="mb-8 flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.3em] text-cyan-400">
+              NETQUEST
+            </p>
+
+            <h1 className="mt-3 text-3xl font-black sm:text-5xl">
+              Test History
+            </h1>
+
+            <p className="mt-3 text-slate-400">
+              {studentName
+                ? `Welcome, ${studentName}. Review your attempts and progress.`
+                : "Review your attempts and track your progress."}
+            </p>
           </div>
-        </div>
-      )}
 
-      <main className="min-h-screen bg-[#050816] px-5 py-8 text-white">
-        <div className="mx-auto max-w-6xl">
-          <header className="mb-10 flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-[0.3em] text-cyan-400">
-                NETQUEST
-              </p>
-              <h1 className="mt-3 text-4xl font-black md:text-5xl">
-                Attempt History 📜
-              </h1>
-              <p className="mt-2 text-slate-400">
-                Review your previous challenges and track your progress.
-              </p>
-            </div>
-            <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 px-5 py-3 text-center">
-              <p className="text-xs uppercase tracking-wider text-slate-500">Student ID</p>
-              <p className="mt-1 font-black text-cyan-400">{studentId || "--"}</p>
-            </div>
-          </header>
+          <div className="flex flex-wrap gap-3">
+            <Link
+              href="/"
+              className="rounded-xl border border-white/10 px-4 py-3 font-semibold hover:border-cyan-400"
+            >
+              Home
+            </Link>
 
-          <section className="mb-10 grid gap-5 sm:grid-cols-3">
-            <SummaryCard icon="🎯" label="Total Attempts" value={results.length.toString()} />
-            <SummaryCard icon="🏆" label="Best Score" value={results.length ? `${bestPercentage}%` : "--"} />
-            <SummaryCard icon="📈" label="Average" value={results.length ? `${averagePercentage}%` : "--"} />
-          </section>
-
-          {loading ? (
-            <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-12 text-center">
-              <div className="text-4xl">⚡</div>
-              <p className="mt-3 text-slate-400">Loading your attempts...</p>
-            </div>
-          ) : attempts.length === 0 ? (
-            <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-12 text-center">
-              <div className="text-5xl">🎮</div>
-              <h2 className="mt-4 text-2xl font-black">No attempts yet</h2>
-              <p className="mt-2 text-slate-500">
-                Start a challenge and your result will appear here automatically.
-              </p>
-              <a
-                href="/test"
-                className="mt-6 inline-block rounded-xl bg-cyan-400 px-7 py-3 font-black text-slate-950"
-              >
-                START A CHALLENGE 🚀
-              </a>
-            </div>
-          ) : (
-            <section>
-              <div className="mb-5">
-                <p className="text-xs font-bold uppercase tracking-[0.25em] text-cyan-400">
-                  Performance Log
-                </p>
-                <h2 className="mt-2 text-3xl font-black">All Attempts</h2>
-              </div>
-
-              <div className="space-y-4">
-                {attempts.map((attempt, index) => {
-                  const expanded = selectedAttemptId === attempt.id;
-                  const percentage = Number(attempt.percentage) || 0;
-                  const date = new Date(attempt.created_at).toLocaleString("en-IN", {
-                    dateStyle: "medium",
-                    timeStyle: "short",
-                  });
-
-                  return (
-                    <article
-                      key={attempt.id}
-                      className="rounded-3xl border border-white/10 bg-white/[0.03] p-6 transition hover:border-cyan-400/30"
-                    >
-                      <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="rounded-full bg-cyan-400/10 px-3 py-1 text-xs font-bold text-cyan-400">
-                              Attempt #{results.length - index}
-                            </span>
-                            {attempt.test && (
-                              <span className="rounded-full bg-white/5 px-3 py-1 text-xs font-bold text-slate-500">
-                                {attempt.test.difficulty}
-                              </span>
-                            )}
-                          </div>
-                          <h3 className="mt-3 truncate text-xl font-black">
-                            {attempt.test?.title || `Challenge #${attempt.test_id}`}
-                          </h3>
-                          <p className="mt-2 text-sm text-slate-500">{date}</p>
-                        </div>
-
-                        <div className="grid grid-cols-3 gap-3 lg:min-w-[420px]">
-                          <MiniStat label="Score" value={`${attempt.score}/${attempt.total_marks}`} />
-                          <MiniStat label="Percentage" value={`${percentage}%`} />
-                          <MiniStat label="Correct" value={`${attempt.correct_answers}`} />
-                        </div>
-                      </div>
-
-                      <button
-                        onClick={() => setSelectedAttemptId(expanded ? null : attempt.id)}
-                        className="mt-5 w-full rounded-xl border border-cyan-400/20 bg-cyan-400/5 py-3 font-black text-cyan-400 transition hover:bg-cyan-400/10"
-                      >
-                        {expanded ? "HIDE ATTEMPT DETAILS ↑" : "VIEW ATTEMPT DETAILS ↓"}
-                      </button>
-
-                      {expanded && (
-                        <div className="mt-5 grid gap-4 border-t border-white/10 pt-5 sm:grid-cols-2 lg:grid-cols-4">
-                          <MiniStat label="Answered" value={`${attempt.answered_questions}`} />
-                          <MiniStat label="Correct" value={`${attempt.correct_answers}`} />
-                          <MiniStat label="Wrong" value={`${attempt.wrong_answers}`} />
-                          <MiniStat label="Result" value={percentage >= 80 ? "Excellent 🔥" : percentage >= 50 ? "Good 💪" : "Keep Practicing 🚀"} />
-                        </div>
-                      )}
-                    </article>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-
-          <div className="mt-10 flex flex-col gap-3 sm:flex-row">
-            <a
+            <Link
               href="/dashboard"
-              className="rounded-xl border border-white/10 px-7 py-3 text-center font-black transition hover:border-cyan-400/30"
+              className="rounded-xl bg-cyan-400 px-4 py-3 font-bold text-slate-950 hover:bg-cyan-300"
             >
-              ← DASHBOARD
-            </a>
-            <a
-              href="/test"
-              className="rounded-xl bg-cyan-400 px-7 py-3 text-center font-black text-slate-950"
-            >
-              START NEW CHALLENGE 🚀
-            </a>
+              Dashboard
+            </Link>
           </div>
+        </header>
 
-          <footer className="mt-16 border-t border-white/10 pt-6 text-center text-xs text-slate-600">
-            NETQUEST • Learn • Practice • Compete 🚀
-          </footer>
-        </div>
-      </main>
-    </>
+        {loading ? (
+          <Panel>
+            <p className="text-slate-400">
+              Loading your attempts...
+            </p>
+          </Panel>
+        ) : error ? (
+          <Panel>
+            <h2 className="text-xl font-bold text-rose-300">
+              Could not load history
+            </h2>
+
+            <p className="mt-3 text-slate-300">{error}</p>
+
+            {error.toLowerCase().includes("log in") && (
+              <Link
+                href="/student/login"
+                className="mt-5 inline-block rounded-xl bg-cyan-400 px-5 py-3 font-bold text-slate-950"
+              >
+                Student Login
+              </Link>
+            )}
+          </Panel>
+        ) : (
+          <>
+            <section className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <Summary
+                label="Total Attempts"
+                value={`${attempts.length}`}
+                icon="📝"
+              />
+
+              <Summary
+                label="Best Percentage"
+                value={attempts.length ? `${bestPercentage}%` : "--"}
+                icon="🏆"
+              />
+
+              <Summary
+                label="Average Percentage"
+                value={attempts.length ? `${averagePercentage}%` : "--"}
+                icon="📊"
+              />
+
+              <Summary
+                label="Average Duration"
+                value={
+                  averageDuration !== null
+                    ? formatDuration(averageDuration)
+                    : "--"
+                }
+                icon="⏱️"
+              />
+            </section>
+
+            {attempts.length === 0 ? (
+              <Panel>
+                <div className="text-4xl">🎯</div>
+
+                <h2 className="mt-3 text-2xl font-black">
+                  No attempts yet
+                </h2>
+
+                <p className="mt-2 text-slate-400">
+                  Complete a test and your results will appear here.
+                </p>
+
+                <Link
+                  href="/test"
+                  className="mt-5 inline-block rounded-xl bg-cyan-400 px-5 py-3 font-bold text-slate-950"
+                >
+                  Explore Tests
+                </Link>
+              </Panel>
+            ) : (
+              <section>
+                <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-2xl font-black">
+                      Your Attempts
+                    </h2>
+
+                    <p className="mt-1 text-sm text-slate-400">
+                      Select an attempt to view its complete result.
+                    </p>
+                  </div>
+
+                  <span className="rounded-full border border-white/10 px-4 py-2 text-sm text-slate-400">
+                    {attempts.length} attempts
+                  </span>
+                </div>
+
+                <div className="space-y-4">
+                  {attempts.map((attempt, index) => {
+                    const percentage =
+                      Number(attempt.percentage) || 0;
+
+                    return (
+                      <article
+                        key={attempt.id}
+                        className="rounded-3xl border border-white/10 bg-white/[0.03] p-5 transition hover:border-cyan-400/40 sm:p-6"
+                      >
+                        <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap gap-2">
+                              <span className="rounded-full bg-cyan-400/10 px-3 py-1 text-xs font-bold text-cyan-300">
+                                Attempt #{attempts.length - index}
+                              </span>
+
+                              {attempt.test?.category && (
+                                <span className="rounded-full bg-white/5 px-3 py-1 text-xs text-slate-300">
+                                  {attempt.test.category}
+                                </span>
+                              )}
+
+                              {attempt.test?.difficulty && (
+                                <span className="rounded-full bg-white/5 px-3 py-1 text-xs text-slate-300">
+                                  {attempt.test.difficulty}
+                                </span>
+                              )}
+                            </div>
+
+                            <h3 className="mt-3 truncate text-xl font-black">
+                              {attempt.test?.title ??
+                                `Test #${attempt.test_id}`}
+                            </h3>
+
+                            <p className="mt-2 text-sm text-slate-400">
+                              {new Date(
+                                attempt.created_at
+                              ).toLocaleString("en-IN", {
+                                dateStyle: "medium",
+                                timeStyle: "short",
+                              })}
+                            </p>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                            <MiniStat
+                              label="Score"
+                              value={`${attempt.score}/${attempt.total_marks}`}
+                            />
+
+                            <MiniStat
+                              label="Percentage"
+                              value={`${percentage}%`}
+                              highlight
+                            />
+
+                            <MiniStat
+                              label="Correct"
+                              value={`${attempt.correct_answers}`}
+                            />
+
+                            <MiniStat
+                              label="Wrong"
+                              value={`${attempt.wrong_answers}`}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="mt-5 grid gap-3 border-t border-white/10 pt-4 sm:grid-cols-3">
+                          <InfoItem
+                            label="Questions answered"
+                            value={`${attempt.answered_questions}`}
+                          />
+
+                          <InfoItem
+                            label="Time taken"
+                            value={formatDuration(
+                              attempt.duration_seconds
+                            )}
+                          />
+
+                          <InfoItem
+                            label="Result reference"
+                            value={`#${attempt.id}`}
+                          />
+                        </div>
+
+                        <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="mb-2 flex justify-between text-xs text-slate-400">
+                              <span>Performance</span>
+                              <span>{percentage}%</span>
+                            </div>
+
+                            <div className="h-2 overflow-hidden rounded-full bg-white/10">
+                              <div
+                                className="h-full rounded-full bg-cyan-400"
+                                style={{
+                                  width: `${Math.min(100, Math.max(0, percentage))}%`,
+                                }}
+                              />
+                            </div>
+                          </div>
+
+                          <Link
+                            href={`/results/${attempt.id}`}
+                            className="rounded-xl bg-cyan-400 px-5 py-3 text-sm font-black text-slate-950 transition hover:bg-cyan-300"
+                          >
+                            View Full Result →
+                          </Link>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+          </>
+        )}
+
+        <footer className="mt-12 border-t border-white/10 pt-6 text-center text-xs text-slate-500">
+          NETQUEST · Learn · Practice · Improve
+        </footer>
+      </div>
+    </main>
   );
 }
 
-function SummaryCard({ icon, label, value }: { icon: string; label: string; value: string }) {
+function Panel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-6">
+    <section className="rounded-3xl border border-white/10 bg-white/[0.03] p-6 sm:p-10">
+      {children}
+    </section>
+  );
+}
+
+function Summary({
+  label,
+  value,
+  icon,
+}: {
+  label: string;
+  value: string;
+  icon: string;
+}) {
+  return (
+    <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-5">
       <div className="flex items-center justify-between">
-        <span className="text-3xl">{icon}</span>
-        <span className="text-3xl font-black text-cyan-400">{value}</span>
+        <p className="text-sm font-bold uppercase tracking-wider text-slate-400">
+          {label}
+        </p>
+        <span className="text-xl">{icon}</span>
       </div>
-      <p className="mt-4 text-sm font-bold uppercase tracking-wider text-slate-500">{label}</p>
+
+      <p className="mt-3 break-words text-2xl font-black text-cyan-300">
+        {value}
+      </p>
     </div>
   );
 }
 
-function MiniStat({ label, value }: { label: string; value: string }) {
+function MiniStat({
+  label,
+  value,
+  highlight = false,
+}: {
+  label: string;
+  value: string;
+  highlight?: boolean;
+}) {
   return (
-    <div className="rounded-xl border border-white/10 bg-black/20 p-3 text-center">
-      <p className="text-xs text-slate-600">{label}</p>
-      <p className="mt-1 font-black">{value}</p>
+    <div className="min-w-0 rounded-xl border border-white/10 bg-black/20 p-3 text-center">
+      <p className="text-xs text-slate-400">{label}</p>
+      <p
+        className={`mt-2 break-words font-black ${
+          highlight ? "text-cyan-300" : "text-white"
+        }`}
+      >
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function InfoItem({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-xl bg-white/[0.03] p-3">
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className="mt-1 break-words text-sm font-bold text-slate-200">
+        {value}
+      </p>
     </div>
   );
 }

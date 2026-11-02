@@ -164,6 +164,14 @@ export default function StudentLoginPage() {
             placeholder="Password (minimum 8 characters)"
             className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 outline-none focus:border-cyan-400"
           />
+          {mode === "login" && (
+  <Link
+    href="/forgot-password"
+    className="block text-right text-sm text-cyan-300 hover:underline"
+  >
+    Forgot Password?
+  </Link>
+)}
 
           {error && (
             <p role="alert" className="rounded-lg bg-red-950/50 p-3 text-sm text-red-300">

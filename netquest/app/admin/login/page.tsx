@@ -208,6 +208,18 @@ export default function AdminLoginPage() {
             marginBottom: 18,
           }}
         />
+        <div style={{ textAlign: "right", marginTop: -10, marginBottom: 18 }}>
+  <a
+    href="/forgot-password"
+    style={{
+      color: "#67e8f9",
+      fontSize: 13,
+      textDecoration: "none",
+    }}
+  >
+    Forgot Password?
+  </a>
+</div>
 
         {error && (
           <p role="alert" style={{ color: "#fca5a5", fontSize: 13 }}>
